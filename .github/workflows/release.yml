@@ -26,7 +26,7 @@ jobs:
 
       - name: Build binaries
         run: |
-          $ver = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "0.3.0" }
+          $ver = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "0.4.0" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           go build -v -ldflags "-H=windowsgui -X main.version=$ver" -o dist/netscan.exe ./cmd/netscan
           go build -v -ldflags "-s -w -X main.version=$ver" -o dist/updater.exe ./cmd/updater

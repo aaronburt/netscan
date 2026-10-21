@@ -8,7 +8,7 @@ import (
 	"github.com/aaronburt/netscan/internal/installer"
 )
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 func main() {
 	dirFlag := flag.String("dir", "", "installation directory")
