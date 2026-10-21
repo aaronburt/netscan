@@ -6,8 +6,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 func ProbeTCP(target Target, timeout time.Duration, seq uint64) ProbeResult {
@@ -50,26 +48,11 @@ func ProbeTCP(target Target, timeout time.Duration, seq uint64) ProbeResult {
 		return res
 	}
 
-	var errno windows.Errno
-	if errors.As(err, &errno) {
-		if errno == windows.WSAECONNREFUSED {
-			res.Reached = true
-			res.OK = false
-			res.ErrCode = ErrRefused
-			return res
-		}
-		if errno == windows.WSAECONNRESET {
-			res.Reached = true
-			res.OK = false
-			res.ErrCode = ErrReset
-			return res
-		}
-		if errno == windows.WSAENETUNREACH || errno == windows.WSAEHOSTUNREACH {
-			res.Reached = false
-			res.OK = false
-			res.ErrCode = ErrUnreachable
-			return res
-		}
+	if code, reached, ok := classifyDialErrno(err); ok {
+		res.Reached = reached
+		res.OK = false
+		res.ErrCode = code
+		return res
 	}
 
 	var sysErr syscall.Errno
