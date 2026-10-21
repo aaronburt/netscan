@@ -27,7 +27,7 @@ import (
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
-var version = "0.4.0"
+var version = "0.4.1"
 
 func init() {
 	runtime.LockOSThread()
@@ -222,6 +222,11 @@ func main() {
 			Kind:      netenv.SysEventSuspend,
 			Detail:    fmt.Sprintf("scheduler gap of %v", gap),
 		}
+		sysEventCh <- netenv.SystemEvent{
+			Timestamp: time.Now().UTC().UnixMilli(),
+			Kind:      netenv.SysEventResume,
+			Detail:    fmt.Sprintf("scheduler resumed after gap of %v", gap),
+		}
 	})
 
 	srv, err := server.NewServer(cfg, storeReader, det, h, sched, netEnv, version)
@@ -371,4 +376,19 @@ func main() {
 	)
 
 	trayMgr.Run(rootCtx)
+
+	if !shuttingDown.Load() {
+		logger.Warn("tray loop exited or unavailable, continuing in headless mode")
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		rootCancel()
+		supervisor.Stop(5 * time.Second)
+		storeWriter.FlushSync()
+		_ = db.Close()
+		_ = srv.Stop()
+		_ = os.Remove(config.PortPath())
+		_ = logCloser.Close()
+		_ = mutexHandle.Close()
+	}
 }

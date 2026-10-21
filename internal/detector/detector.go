@@ -325,6 +325,13 @@ func (d *Detector) transitionOnProbe(now time.Time, hasLatency bool) (*Event, *E
 			d.state = StateOutage
 			d.consecAllUP = 0
 		}
+	case StateSuspended:
+		if anyDown {
+			d.switchFastMode(true)
+			d.state = StateOutage
+			d.consecAllUP = 0
+			return d.openNewEvent(EventKindOutage, now), nil
+		}
 	}
 	return nil, nil
 }
@@ -374,6 +381,16 @@ func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
 			d.switchFastMode(false)
 			closed := d.closeOpenEvent(now, false)
 			return nil, closed
+		}
+	case StateSuspended:
+		if anyDown {
+			d.switchFastMode(true)
+			d.state = StateOutage
+			d.consecAllUP = 0
+			return d.openNewEvent(EventKindOutage, now), nil
+		} else if d.consecAllUP >= 3 {
+			d.state = StateHealthy
+			d.switchFastMode(false)
 		}
 	}
 

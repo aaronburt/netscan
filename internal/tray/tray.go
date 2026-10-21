@@ -19,6 +19,7 @@ type TrayManager struct {
 	updaterMgr    *updater.Manager
 	onExit        func()
 	onPauseToggle func() bool
+	ready         bool
 }
 
 func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool) *TrayManager {
@@ -33,9 +34,10 @@ func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit fu
 
 func (tm *TrayManager) Run(ctx context.Context) {
 	systray.Run(func() {
+		tm.ready = true
 		tm.onReady(ctx)
 	}, func() {
-		if tm.onExit != nil {
+		if tm.ready && tm.onExit != nil {
 			tm.onExit()
 		}
 	})

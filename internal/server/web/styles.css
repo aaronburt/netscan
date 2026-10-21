@@ -1124,7 +1124,7 @@ pre.log .o{color:var(--good)}
   margin-top:4px;
 }
 
-.hidden{
+.hidden,[hidden]{
   display:none!important;
 }
 

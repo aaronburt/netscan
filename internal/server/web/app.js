@@ -5,7 +5,7 @@ const SER = [
   { id: 'icmp', name: 'WAN ICMP', short: 'ICMP', targetId: 10, target: '1.1.1.1' },
   { id: 'tcp', name: 'WAN TCP', short: 'TCP', targetId: 20, target: '1.1.1.1:443' },
   { id: 'dns', name: 'DNS', short: 'DNS', targetId: 30, target: '1.1.1.1:53' },
-  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 40, target: 'cp.cloudflare.com' }
+  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 50, target: 'cp.cloudflare.com' }
 ];
 
 const BYID = {};
@@ -48,6 +48,7 @@ const BADGE = {
 };
 
 let live = [];
+let backendState = '';
 let events = [];
 let failedSamples = [];
 let hover = null;
@@ -113,15 +114,21 @@ function normalizeEvent(e) {
 
 function calcState() {
   if (paused) return 'paused';
+  if (backendState && backendState !== 'suspended') return backendState;
   if (!live.length) return 'healthy';
   const last = live[live.length - 1];
-  const hasBad = SER.some(s => last.v[s.id] == null);
-  if (!hasBad) return 'healthy';
-  const prev = live.length > 1 ? live[live.length - 2] : null;
-  if (prev && SER.some(s => prev.v[s.id] == null)) {
-    return 'outage';
+  const wanDown = last.v.icmp == null && last.v.tcp == null;
+  const gwDown = last.v.gw == null;
+  if (wanDown || gwDown) {
+    const prev = live.length > 1 ? live[live.length - 2] : null;
+    if (prev && ((prev.v.icmp == null && prev.v.tcp == null) || prev.v.gw == null)) {
+      return 'outage';
+    }
+    return 'degraded';
   }
-  return 'degraded';
+  const anyBad = SER.some(s => last.v[s.id] == null);
+  if (anyBad) return 'degraded';
+  return 'healthy';
 }
 
 function computeStats(win) {
@@ -151,6 +158,8 @@ function renderStatus() {
     txt = 'One probe failed. NetScan waits for a second failure before it calls this an outage.';
   } else if (st === 'recovering') {
     txt = 'Answers are coming back. The drop is closed after <strong>3 good probes</strong> in a row.';
+  } else if (st === 'suspended') {
+    txt = 'System sleep or gap detected. Re-evaluating connection stability.';
   } else if (st === 'paused') {
     txt = 'Monitoring paused. Background probing is temporarily halted.';
   } else if (lastClosed) {
@@ -448,8 +457,12 @@ function renderLog() {
 
   const left = rows.length - shown.length;
   $('tbl-note').textContent = rows.length ? 'Showing ' + shown.length + ' of ' + rows.length + '. Select a row to see the seconds around it.' : '';
-  $('more').hidden = left <= 0;
-  $('more').textContent = 'Show ' + Math.min(10, left) + ' more';
+  const moreBtn = $('more');
+  if (moreBtn) {
+    moreBtn.hidden = left <= 0;
+    moreBtn.classList.toggle('hidden', left <= 0);
+    moreBtn.textContent = 'Show ' + Math.min(10, left) + ' more';
+  }
 }
 
 async function openDrawer(id) {
@@ -589,6 +602,9 @@ async function fetchStatus() {
       $('ver-label').textContent = 'v' + data.version.replace(/^v/, '');
     }
     if (data.snapshot) {
+      if (data.snapshot.state_string) {
+        backendState = data.snapshot.state_string.toLowerCase();
+      }
       ingestSnapshot(data.snapshot);
     }
   } catch (_) {}
@@ -633,6 +649,9 @@ async function fetchFailedSamples() {
 
 function ingestSnapshot(snap) {
   if (!snap) return;
+  if (snap.state_string) {
+    backendState = snap.state_string.toLowerCase();
+  }
   const rtts = snap.latest_rtt_us || {};
   const v = {};
 
@@ -646,7 +665,7 @@ function ingestSnapshot(snap) {
         if (s.id === 'icmp') return ik >= 10 && ik < 20;
         if (s.id === 'tcp') return ik >= 20 && ik < 30;
         if (s.id === 'dns') return ik >= 30 && ik < 40;
-        if (s.id === 'http') return ik >= 40 && ik < 50;
+        if (s.id === 'http') return ik >= 50 && ik < 60;
         return false;
       });
       if (match != null) raw = rtts[match];
@@ -686,7 +705,7 @@ async function fetchRecentSamples() {
             if (sr.id === 'icmp') return sm.target_id >= 10 && sm.target_id < 20 || sm.layer === 'wan_icmp';
             if (sr.id === 'tcp') return sm.target_id >= 20 && sm.target_id < 30 || sm.layer === 'wan_tcp';
             if (sr.id === 'dns') return sm.target_id >= 30 && sm.target_id < 40 || sm.layer === 'dns';
-            if (sr.id === 'http') return sm.target_id >= 40 && sm.target_id < 50 || sm.layer === 'http';
+            if (sr.id === 'http') return sm.target_id >= 50 && sm.target_id < 60 || sm.layer === 'http';
             return false;
           });
           if (s) {
