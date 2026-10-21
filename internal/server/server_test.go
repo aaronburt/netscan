@@ -23,6 +23,7 @@ import (
 
 func setupTestServer(t *testing.T) (*server.Server, string) {
 	tmpDir := t.TempDir()
+	t.Setenv("NETSCAN_DATA_DIR", tmpDir) // keep the port file out of the real data dir
 	dbPath := filepath.Join(tmpDir, "srv.db")
 
 	db, err := store.OpenDB(dbPath)
@@ -248,5 +249,23 @@ func TestServerResetHistory(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// Pause and resume change state, so they must not be reachable with a GET
+// (which skips the CSRF check and can be triggered by any web page).
+func TestPauseResumeRejectGET(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	for _, path := range []string{"/api/pause", "/api/resume"} {
+		res, err := http.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("GET %s = %d, want 405", path, res.StatusCode)
+		}
 	}
 }

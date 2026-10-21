@@ -20,12 +20,23 @@ type HubMessage struct {
 }
 
 type Subscriber struct {
-	ch   chan HubMessage
-	done chan struct{}
+	ch        chan HubMessage
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func (s *Subscriber) Channel() <-chan HubMessage {
 	return s.ch
+}
+
+// Done is closed when the subscriber is removed, either by Unsubscribe or
+// because it fell too far behind. The reader should stop when it fires.
+func (s *Subscriber) Done() <-chan struct{} {
+	return s.done
+}
+
+func (s *Subscriber) close() {
+	s.closeOnce.Do(func() { close(s.done) })
 }
 
 type Hub struct {
@@ -55,10 +66,8 @@ func (h *Hub) Unsubscribe(sub *Subscriber) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
-	if _, ok := h.subscribers[sub]; ok {
-		delete(h.subscribers, sub)
-		close(sub.done)
-	}
+	delete(h.subscribers, sub)
+	sub.close()
 }
 
 func (h *Hub) PublishSnapshot(snap detector.Snapshot) {
@@ -99,6 +108,7 @@ func (h *Hub) broadcast(msg HubMessage) {
 			defer h.lock.Unlock()
 			for _, s := range subs {
 				delete(h.subscribers, s)
+				s.close()
 			}
 		}(toRemove)
 	}

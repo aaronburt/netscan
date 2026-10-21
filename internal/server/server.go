@@ -292,6 +292,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The server's WriteTimeout would otherwise cut the stream after 30s.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -313,6 +316,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-sub.Done():
+			// The hub dropped us for falling behind. Ending the response
+			// makes the browser's EventSource reconnect with a fresh snapshot.
 			return
 		case <-heartbeatTicker.C:
 			_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
@@ -404,13 +411,21 @@ func (s *Server) handleRollups(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(rollups)
 }
 
-func (s *Server) handlePause(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.scheduler.Pause()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"paused"}`))
 }
 
-func (s *Server) handleResume(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.scheduler.Resume()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"resumed"}`))
