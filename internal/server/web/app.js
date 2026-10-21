@@ -527,7 +527,7 @@ function renderUpdateUI(data) {
     dom.updateProgressFill.style.width = `${data.progress_pct || 0}%`;
     dom.updateProgressLabel.textContent = `Downloading: ${data.progress_pct || 0}%`;
   } else if (data.state === 'ready_to_restart') {
-    dom.updateStatusMsg.textContent = 'Update installed successfully! Restart NetScan to apply.';
+    dom.updateStatusMsg.textContent = 'Update installed! Relaunching NetScan...';
     dom.btnInstallUpdate.classList.add('hidden');
     dom.btnRestartApp.classList.remove('hidden');
     dom.updateProgressContainer.classList.add('hidden');
@@ -571,6 +571,32 @@ async function triggerUpdateCheck() {
   }
 }
 
+function waitForServerRestart() {
+  dom.btnRestartApp.disabled = true;
+  dom.updateProgressContainer.classList.add('hidden');
+  dom.updateStatusMsg.textContent = 'Relaunching NetScan...';
+
+  let attempts = 0;
+  const checkInterval = setInterval(async () => {
+    attempts++;
+    if (attempts > 30) {
+      clearInterval(checkInterval);
+      window.location.reload();
+      return;
+    }
+    if (attempts < 2) {
+      return;
+    }
+    try {
+      const ping = await fetch('/healthz');
+      if (ping.ok) {
+        clearInterval(checkInterval);
+        window.location.reload();
+      }
+    } catch (_) {}
+  }, 1000);
+}
+
 async function triggerUpdateInstall() {
   dom.btnInstallUpdate.classList.add('hidden');
   dom.updateProgressContainer.classList.remove('hidden');
@@ -592,11 +618,15 @@ async function triggerUpdateInstall() {
         const res = await fetch('/api/update/status');
         const data = await res.json();
         renderUpdateUI(data);
-        if (data.state === 'ready_to_restart' || data.state === 'error') {
+        if (data.state === 'error') {
           clearInterval(pollInterval);
+        } else if (data.state === 'ready_to_restart') {
+          clearInterval(pollInterval);
+          waitForServerRestart();
         }
       } catch (_) {
         clearInterval(pollInterval);
+        waitForServerRestart();
       }
     }, 400);
   } catch (err) {
@@ -616,26 +646,9 @@ async function triggerUpdateRestart() {
         'Sec-Fetch-Site': 'same-origin',
       },
     });
+  } catch (_) {}
 
-    let attempts = 0;
-    const checkInterval = setInterval(async () => {
-      attempts++;
-      if (attempts > 30) {
-        clearInterval(checkInterval);
-        window.location.reload();
-        return;
-      }
-      try {
-        const ping = await fetch('/healthz');
-        if (ping.ok) {
-          clearInterval(checkInterval);
-          window.location.reload();
-        }
-      } catch (_) {}
-    }, 1000);
-  } catch (_) {
-    dom.updateStatusMsg.textContent = 'Error initiating restart';
-  }
+  waitForServerRestart();
 }
 
 document.addEventListener('DOMContentLoaded', init);

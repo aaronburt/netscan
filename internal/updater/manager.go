@@ -3,10 +3,8 @@ package updater
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -44,14 +42,16 @@ type Manager struct {
 	onBeforeRestart func()
 	onStatusChange  func(StatusResponse)
 
-	state           UpdateState
-	latestRelease   *Release
-	progressPct     int
-	bytesDownloaded int64
-	bytesTotal      int64
-	lastError       string
-	lastCheckedMS   int64
-	httpClient      *http.Client
+	state            UpdateState
+	latestRelease    *Release
+	stagedBinaryPath string
+	restarting       bool
+	progressPct      int
+	bytesDownloaded  int64
+	bytesTotal       int64
+	lastError        string
+	lastCheckedMS    int64
+	httpClient       *http.Client
 }
 
 func NewManager(repo, currentVersion string, onBeforeRestart func()) *Manager {
@@ -162,17 +162,7 @@ func (m *Manager) Apply(ctx context.Context) error {
 
 	m.notifyStatusChanged()
 
-	exePath, err := os.Executable()
-	if err != nil {
-		m.mu.Lock()
-		m.state = StateError
-		m.lastError = err.Error()
-		m.mu.Unlock()
-		m.notifyStatusChanged()
-		return err
-	}
-
-	exePath, err = filepath.EvalSymlinks(exePath)
+	exePath, err := ExecutablePath()
 	if err != nil {
 		m.mu.Lock()
 		m.state = StateError
@@ -213,54 +203,81 @@ func (m *Manager) Apply(ctx context.Context) error {
 		return err
 	}
 
-	if err := ReplaceCurrentBinary(downloadedPath); err != nil {
-		_ = os.Remove(downloadedPath)
+	if HasUpdaterBinary(targetDir) {
 		m.mu.Lock()
-		m.state = StateError
-		m.lastError = err.Error()
+		m.stagedBinaryPath = downloadedPath
+		m.state = StateReadyToRestart
+		m.progressPct = 100
 		m.mu.Unlock()
-		m.notifyStatusChanged()
-		return err
+	} else {
+		if err := ReplaceCurrentBinary(downloadedPath); err != nil {
+			_ = os.Remove(downloadedPath)
+			m.mu.Lock()
+			m.state = StateError
+			m.lastError = err.Error()
+			m.mu.Unlock()
+			m.notifyStatusChanged()
+			return err
+		}
+
+		m.mu.Lock()
+		m.stagedBinaryPath = ""
+		m.state = StateReadyToRestart
+		m.progressPct = 100
+		m.mu.Unlock()
 	}
 
-	m.mu.Lock()
-	m.state = StateReadyToRestart
-	m.progressPct = 100
-	m.mu.Unlock()
-
 	m.notifyStatusChanged()
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = m.Restart()
+	}()
+
 	return nil
 }
 
 func (m *Manager) Restart() error {
-	m.mu.RLock()
-	st := m.state
-	beforeRestart := m.onBeforeRestart
-	m.mu.RUnlock()
-
-	if st != StateReadyToRestart {
+	m.mu.Lock()
+	if m.restarting {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.state != StateReadyToRestart {
+		m.mu.Unlock()
 		return errors.New("cannot restart: update has not been downloaded and prepared")
 	}
+	m.restarting = true
+	stagedPath := m.stagedBinaryPath
+	beforeRestart := m.onBeforeRestart
+	m.mu.Unlock()
 
-	exePath, err := os.Executable()
+	exePath, err := ExecutablePath()
 	if err != nil {
 		return err
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
-	if err != nil {
-		return err
-	}
+	targetDir := filepath.Dir(exePath)
 
 	if beforeRestart != nil {
 		beforeRestart()
 	}
 
-	cmd := exec.Command(exePath, os.Args[1:]...)
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start updated application: %w", err)
+	if HasUpdaterBinary(targetDir) {
+		if err := LaunchUpdaterHelper(UpdaterBinaryPath(targetDir), exePath, stagedPath, os.Getpid(), os.Args[1:]); err != nil {
+			return err
+		}
+		os.Exit(0)
+		return nil
+	}
+
+	if stagedPath != "" {
+		if err := ReplaceCurrentBinary(stagedPath); err != nil {
+			return err
+		}
+	}
+
+	if err := RelaunchExecutable(os.Args[1:]); err != nil {
+		return err
 	}
 
 	go func() {

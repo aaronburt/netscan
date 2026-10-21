@@ -60,6 +60,7 @@ func TestSelectAsset(t *testing.T) {
 	}
 
 	exeOnly := []updater.ReleaseAsset{
+		{Name: "updater.exe", DownloadURL: "https://example.com/updater.exe", Size: 100},
 		{Name: "netscan.exe", DownloadURL: "https://example.com/netscan.exe", Size: 300},
 	}
 	bestExe, ok := updater.SelectAsset(exeOnly, "windows", "amd64")
@@ -125,6 +126,13 @@ func TestDownloadAndExtractZip(t *testing.T) {
 
 	var zipBuf bytes.Buffer
 	zw := zip.NewWriter(&zipBuf)
+	uf, err := zw.Create("updater.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uf.Write(payload); err != nil {
+		t.Fatal(err)
+	}
 	f, err := zw.Create("netscan.exe")
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +167,10 @@ func TestDownloadAndExtractZip(t *testing.T) {
 	if err := updater.ValidateExecutable(extractedPath); err != nil {
 		t.Fatalf("ValidateExecutable failed: %v", err)
 	}
+
+	if !updater.HasUpdaterBinary(tmpDir) {
+		t.Fatal("expected updater.exe to be extracted into targetDir")
+	}
 }
 
 func TestChecksumVerification(t *testing.T) {
@@ -166,6 +178,13 @@ func TestChecksumVerification(t *testing.T) {
 
 	var zipBuf bytes.Buffer
 	zw := zip.NewWriter(&zipBuf)
+	uf, err := zw.Create("updater.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uf.Write(payload); err != nil {
+		t.Fatal(err)
+	}
 	f, err := zw.Create("netscan.exe")
 	if err != nil {
 		t.Fatal(err)

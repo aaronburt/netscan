@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -107,12 +108,25 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Validation failed: %v\n", err)
 			os.Exit(1)
 		}
+		if updater.HasUpdaterBinary(targetDir) {
+			fmt.Printf("Handing off update (%s) to updater.exe and relaunching...\n", res.Release.Version)
+			if err := updater.LaunchUpdaterHelper(updater.UpdaterBinaryPath(targetDir), exePath, tmpPath, os.Getpid(), os.Args[1:]); err != nil {
+				_ = os.Remove(tmpPath)
+				fmt.Fprintf(os.Stderr, "Failed to launch updater.exe: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 		if err := updater.ReplaceCurrentBinary(tmpPath); err != nil {
 			_ = os.Remove(tmpPath)
 			fmt.Fprintf(os.Stderr, "Failed to replace executable: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Successfully updated to %s!\nPlease restart NetScan to run the new version.\n", res.Release.Version)
+		fmt.Printf("Successfully updated to %s! Relaunching NetScan...\n", res.Release.Version)
+		if err := updater.RelaunchExecutable(os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to relaunch executable: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -132,7 +146,16 @@ func main() {
 		if app.HandleExistingInstance(tmp) {
 			os.Exit(0)
 		}
-		os.Exit(1)
+		for i := 0; i < 30; i++ {
+			time.Sleep(200 * time.Millisecond)
+			mutexHandle, acquired, err = winapi.AcquireSingleInstance(`Local\NetScan.SingleInstance`)
+			if err == nil && acquired {
+				break
+			}
+		}
+		if !acquired {
+			os.Exit(1)
+		}
 	}
 	defer mutexHandle.Close()
 
@@ -215,12 +238,17 @@ func main() {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	supervisor := app.NewSupervisor(logger)
 
+	var shuttingDown atomic.Bool
 	updaterMgr := updater.NewManager(cfg.Update.Repo, version, func() {
+		shuttingDown.Store(true)
 		logger.Info("restarting for update")
 		rootCancel()
 		supervisor.Stop(3 * time.Second)
 		storeWriter.FlushSync()
+		_ = db.Close()
 		_ = srv.Stop()
+		_ = os.Remove(config.PortPath())
+		_ = logCloser.Close()
 		_ = mutexHandle.Close()
 	})
 	srv.SetUpdaterManager(updaterMgr)
@@ -317,10 +345,18 @@ func main() {
 		h,
 		updaterMgr,
 		func() {
+			if shuttingDown.Swap(true) {
+				return
+			}
 			logger.Info("tray requested exit")
 			rootCancel()
 			supervisor.Stop(5 * time.Second)
 			storeWriter.FlushSync()
+			_ = db.Close()
+			_ = srv.Stop()
+			_ = os.Remove(config.PortPath())
+			_ = logCloser.Close()
+			_ = mutexHandle.Close()
 			os.Exit(0)
 		},
 		func() bool {

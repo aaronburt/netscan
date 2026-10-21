@@ -24,29 +24,36 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build binary
+      - name: Build binaries
         run: |
           $ver = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "0.1.0" }
-          go build -v -ldflags "-H=windowsgui -X main.version=$ver" -o netscan.exe ./cmd/netscan
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          go build -v -ldflags "-H=windowsgui -X main.version=$ver" -o dist/netscan.exe ./cmd/netscan
+          go build -v -ldflags "-s -w" -o dist/updater.exe ./cmd/updater
+          go build -v -ldflags "-s -w -H=windowsgui -X main.version=$ver" -o dist/installer-base.exe ./cmd/installer
 
-      - name: Package archive
+      - name: Package archive and installer
         run: |
-          Compress-Archive -Path netscan.exe -DestinationPath netscan-windows-amd64.zip
+          Compress-Archive -Path dist/netscan.exe, dist/updater.exe -DestinationPath dist/netscan-windows-amd64.zip
+          cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netscan-installer.exe
+          Remove-Item dist/installer-base.exe
 
       - name: Generate checksums
         run: |
-          $files = @("netscan.exe", "netscan-windows-amd64.zip")
+          $files = @("netscan.exe", "updater.exe", "netscan-windows-amd64.zip", "netscan-installer.exe")
           $lines = foreach ($f in $files) {
-            $h = (Get-FileHash -Path $f -Algorithm SHA256).Hash.ToLower()
+            $h = (Get-FileHash -Path "dist/$f" -Algorithm SHA256).Hash.ToLower()
             "$h  $f"
           }
-          $lines | Set-Content -Path "checksums.txt" -Encoding ascii
+          $lines | Set-Content -Path "dist/checksums.txt" -Encoding ascii
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            netscan.exe
-            netscan-windows-amd64.zip
-            checksums.txt
+            dist/netscan.exe
+            dist/updater.exe
+            dist/netscan-windows-amd64.zip
+            dist/netscan-installer.exe
+            dist/checksums.txt
           generate_release_notes: true

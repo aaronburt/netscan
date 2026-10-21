@@ -14,15 +14,42 @@ A lightweight Windows internet stability monitor designed to detect micro-drops,
 ## Build
 
 ```powershell
-go build -o netscan.exe ./cmd/netscan
+go build -ldflags "-H=windowsgui" -o dist\netscan.exe ./cmd/netscan
+go build -ldflags "-s -w" -o dist\updater.exe ./cmd/updater
+go build -ldflags "-s -w -H=windowsgui" -o dist\installer-base.exe ./cmd/installer
+Compress-Archive -Path dist\netscan.exe, dist\updater.exe -DestinationPath dist\netscan-windows-amd64.zip -Force
+cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netscan-installer.exe
+Remove-Item dist\installer-base.exe
 ```
+
+## Installation
+
+Run the self-contained installer:
+
+```powershell
+.\dist\netscan-installer.exe
+```
+
+Or install silently:
+
+```powershell
+.\dist\netscan-installer.exe -silent
+```
+
+To uninstall:
+
+```powershell
+.\dist\netscan-installer.exe -uninstall
+```
+
+Or use Windows Settings -> Installed Apps -> NetScan -> Uninstall.
 
 ## Usage
 
 ### Standard Mode (System Tray)
 
 ```powershell
-.\netscan.exe
+.\dist\netscan.exe
 ```
 
 Open the dashboard in your browser:
@@ -31,13 +58,13 @@ Open the dashboard in your browser:
 ### Headless Mode (Console)
 
 ```powershell
-.\netscan.exe -headless
+.\dist\netscan.exe -headless
 ```
 
 ### Custom Configuration
 
 ```powershell
-.\netscan.exe -config path\to\config.json
+.\dist\netscan.exe -config path\to\config.json
 ```
 
 ### Checking & Installing Updates
@@ -45,11 +72,17 @@ Open the dashboard in your browser:
 Check GitHub for available releases:
 
 ```powershell
-.\netscan.exe -check-update
+.\dist\netscan.exe -check-update
 ```
 
 Download and apply latest update directly:
 
 ```powershell
-.\netscan.exe -update
+.\dist\netscan.exe -update
+```
+
+Or run the standalone updater helper in the `dist\` folder (pulls latest release, stops `netscan.exe`, replaces the binary, and relaunches it):
+
+```powershell
+.\dist\updater.exe
 ```

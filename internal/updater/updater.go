@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -123,6 +124,9 @@ func SelectAsset(assets []ReleaseAsset, targetOS, targetArch string) (ReleaseAss
 
 	for _, a := range assets {
 		lower := strings.ToLower(a.Name)
+		if strings.Contains(lower, "updater") {
+			continue
+		}
 		score := 0
 
 		isZip := strings.HasSuffix(lower, ".zip")
@@ -152,9 +156,9 @@ func SelectAsset(assets []ReleaseAsset, targetOS, targetArch string) (ReleaseAss
 			score += 10
 		}
 
-		if isExe {
+		if isZip {
 			score += 5
-		} else if isZip {
+		} else if isExe {
 			score += 4
 		}
 
@@ -393,11 +397,38 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, assetURL strin
 		defer os.Remove(tmpFilePath)
 
 		var targetZipFile *zip.File
+		var updaterZipFile *zip.File
 		for _, f := range zipReader.File {
-			lower := strings.ToLower(f.Name)
-			if strings.HasSuffix(lower, ".exe") {
+			base := strings.ToLower(filepath.Base(f.Name))
+			if base == "updater.exe" {
+				updaterZipFile = f
+				continue
+			}
+			if base == "netscan.exe" {
 				targetZipFile = f
-				break
+				continue
+			}
+			if strings.HasSuffix(base, ".exe") && targetZipFile == nil {
+				targetZipFile = f
+			}
+		}
+
+		if updaterZipFile != nil {
+			if urc, uerr := updaterZipFile.Open(); uerr == nil {
+				if utmp, terr := os.CreateTemp(targetDir, "updater-extracted-*.tmp"); terr == nil {
+					utmpPath := utmp.Name()
+					_, ucopyErr := io.Copy(utmp, urc)
+					_ = utmp.Close()
+					if ucopyErr == nil {
+						updaterDest := filepath.Join(targetDir, "updater.exe")
+						if err := os.Rename(utmpPath, updaterDest); err != nil {
+							_ = os.Remove(utmpPath)
+						}
+					} else {
+						_ = os.Remove(utmpPath)
+					}
+				}
+				_ = urc.Close()
 			}
 		}
 
@@ -456,12 +487,21 @@ func ValidateExecutable(path string) error {
 	return nil
 }
 
-func ReplaceCurrentBinary(newBinaryPath string) error {
+func ExecutablePath() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
-		return err
+		return "", err
 	}
 	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", err
+	}
+	exePath = strings.TrimSuffix(exePath, ".old")
+	return exePath, nil
+}
+
+func ReplaceCurrentBinary(newBinaryPath string) error {
+	exePath, err := ExecutablePath()
 	if err != nil {
 		return err
 	}
@@ -481,17 +521,85 @@ func ReplaceCurrentBinary(newBinaryPath string) error {
 	return nil
 }
 
-func CleanupOldBinary() {
-	exePath, err := os.Executable()
+func RelaunchExecutable(args []string) error {
+	exePath, err := ExecutablePath()
 	if err != nil {
-		return
+		return err
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
+
+	filteredArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		trimmed := strings.TrimLeft(strings.ToLower(arg), "-")
+		if trimmed == "update" || trimmed == "check-update" || strings.HasPrefix(trimmed, "update=") || strings.HasPrefix(trimmed, "check-update=") {
+			continue
+		}
+		filteredArgs = append(filteredArgs, arg)
+	}
+
+	cmd := exec.Command(exePath, filteredArgs...)
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start updated application: %w", err)
+	}
+	return nil
+}
+
+func UpdaterBinaryPath(targetDir string) string {
+	return filepath.Join(targetDir, "updater.exe")
+}
+
+func HasUpdaterBinary(targetDir string) bool {
+	fi, err := os.Stat(UpdaterBinaryPath(targetDir))
+	return err == nil && !fi.IsDir()
+}
+
+func LaunchUpdaterHelper(updaterPath, targetExePath, stagedExePath string, pid int, forwardArgs []string) error {
+	args := []string{
+		"-pid", strconv.Itoa(pid),
+		"-target", targetExePath,
+	}
+	if stagedExePath != "" {
+		args = append(args, "-source", stagedExePath)
+	}
+	for _, a := range forwardArgs {
+		trimmed := strings.TrimLeft(strings.ToLower(a), "-")
+		if trimmed == "update" || trimmed == "check-update" || strings.HasPrefix(trimmed, "update=") || strings.HasPrefix(trimmed, "check-update=") {
+			continue
+		}
+		args = append(args, "-arg", a)
+	}
+
+	cmd := exec.Command(updaterPath, args...)
+	cmd.Dir = filepath.Dir(targetExePath)
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start updater helper: %w", err)
+	}
+	return nil
+}
+
+func CleanupOldBinary() {
+	exePath, err := ExecutablePath()
 	if err != nil {
 		return
 	}
 	oldPath := exePath + ".old"
-	if _, err := os.Stat(oldPath); err == nil {
-		_ = os.Remove(oldPath)
+	if _, err := os.Stat(oldPath); err != nil {
+		return
 	}
+	if err := os.Remove(oldPath); err == nil {
+		return
+	}
+	go func() {
+		for i := 0; i < 10; i++ {
+			time.Sleep(500 * time.Millisecond)
+			if err := os.Remove(oldPath); err == nil || os.IsNotExist(err) {
+				return
+			}
+		}
+	}()
 }
