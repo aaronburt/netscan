@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{CSRF_TOKEN}}">
+  <title>NetScan — Connection Stability Monitor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-mark">
+        <span class="status-dot healthy" id="global-dot"></span>
+        <h1>NetScan</h1>
+      </div>
+      <div class="status-pill healthy" id="global-pill">HEALTHY</div>
+    </div>
+    <div class="header-right">
+      <div class="net-info" id="net-info">
+        <span class="net-label" id="net-label">LAN / Wi-Fi</span>
+        <span class="gw-label" id="gw-label">Gateway: ...</span>
+      </div>
+      <div class="header-actions">
+        <button id="btn-pause" class="btn btn-secondary">Pause</button>
+        <button id="btn-export-menu" class="btn btn-primary">Export</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="dashboard-container">
+    <section class="strip-section">
+      <div class="strip-header">
+        <h2>Live Monitor (60s Rolling Window)</h2>
+        <div class="strip-metrics">
+          <div class="metric-card" id="card-gw">
+            <span class="metric-title">Gateway</span>
+            <span class="metric-val" id="val-gw">-- ms</span>
+          </div>
+          <div class="metric-card" id="card-wan-icmp">
+            <span class="metric-title">WAN ICMP</span>
+            <span class="metric-val" id="val-wan-icmp">-- ms</span>
+          </div>
+          <div class="metric-card" id="card-wan-tcp">
+            <span class="metric-title">WAN TCP</span>
+            <span class="metric-val" id="val-wan-tcp">-- ms</span>
+          </div>
+          <div class="metric-card" id="card-dns">
+            <span class="metric-title">DNS</span>
+            <span class="metric-val" id="val-dns">-- ms</span>
+          </div>
+          <div class="metric-card" id="card-http">
+            <span class="metric-title">HTTP 204</span>
+            <span class="metric-val" id="val-http">-- ms</span>
+          </div>
+        </div>
+      </div>
+      <div class="canvas-wrapper">
+        <canvas id="live-canvas"></canvas>
+      </div>
+    </section>
+
+    <section class="timeline-section">
+      <div class="section-toolbar">
+        <h2>7-Day Stability Timeline</h2>
+        <div class="time-range-picker">
+          <button class="time-btn" data-hours="1">1h</button>
+          <button class="time-btn" data-hours="6">6h</button>
+          <button class="time-btn active" data-hours="24">24h</button>
+          <button class="time-btn" data-hours="168">7d</button>
+        </div>
+      </div>
+      <div class="canvas-wrapper timeline-canvas-wrapper">
+        <canvas id="timeline-canvas"></canvas>
+      </div>
+    </section>
+
+    <section class="events-section">
+      <div class="section-toolbar">
+        <div class="toolbar-left">
+          <h2>Outage & Latency Events</h2>
+          <span class="badge" id="event-count-badge">0 events</span>
+        </div>
+        <div class="toolbar-filters">
+          <label class="filter-label">
+            Filter:
+            <select id="filter-kind" class="select-input">
+              <option value="">All Kinds</option>
+              <option value="outage">Outages Only</option>
+              <option value="blip">Blips (&lt;2s)</option>
+              <option value="latency">Latency Spikes</option>
+            </select>
+          </label>
+          <label class="filter-label">
+            Class:
+            <select id="filter-class" class="select-input">
+              <option value="">All Layers</option>
+              <option value="WAN">WAN (ISP)</option>
+              <option value="GATEWAY">Gateway (Local)</option>
+              <option value="DNS_ALL">DNS Outage</option>
+              <option value="HTTP">HTTP App Outage</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div tabindex="0" role="region" aria-labelledby="events-table-caption" class="table-wrapper">
+        <table id="events-table">
+          <caption id="events-table-caption" class="sr-only">Connection Outages and Stability Events</caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Classification</th>
+              <th scope="col">Duration</th>
+              <th scope="col">Gateway Health</th>
+              <th scope="col">Uncertainty</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody id="events-tbody">
+            <tr>
+              <td colspan="7" class="empty-state">No events recorded in this time window.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="drilldown-modal" class="modal hidden">
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="drilldown-title">Event Investigation & Probe Drill-Down</h3>
+        <button id="btn-close-modal" class="btn-close" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="drilldown-summary" id="drilldown-summary"></div>
+        <h4>High-Resolution Probe Telemetry (±30s Window)</h4>
+        <div tabindex="0" role="region" aria-labelledby="drilldown-table-caption" class="table-wrapper modal-table-wrapper">
+          <table id="drilldown-table">
+            <caption id="drilldown-table-caption" class="sr-only">Probe samples surrounding outage event</caption>
+            <thead>
+              <tr>
+                <th scope="col">Timestamp</th>
+                <th scope="col">Target</th>
+                <th scope="col">Layer</th>
+                <th scope="col">Status</th>
+                <th scope="col">RTT</th>
+                <th scope="col">Phases</th>
+                <th scope="col">Error</th>
+              </tr>
+            </thead>
+            <tbody id="drilldown-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-backdrop" id="export-backdrop"></div>
+    <div class="modal-content export-modal-content">
+      <div class="modal-header">
+        <h3>Export Telemetry & Reports</h3>
+        <button id="btn-close-export" class="btn-close" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="export-intro">Export logs across the past 7 days for diagnostics, sharing, or submitting evidence to your Internet Service Provider.</p>
+        <div class="export-cards">
+          <div class="export-option-card">
+            <h4>ISP Evidence Report (.txt)</h4>
+            <p>Formal diagnostic report formatted with LAN vs WAN isolation proof and timestamped event records.</p>
+            <a href="/api/export/isp-report.txt" target="_blank" class="btn btn-primary">Download Report</a>
+          </div>
+          <div class="export-option-card">
+            <h4>Outage Events (CSV)</h4>
+            <p>Every micro-drop and outage classified by layer with exact start and end timestamps.</p>
+            <a href="/api/export/events.csv" target="_blank" class="btn btn-secondary">Download CSV</a>
+          </div>
+          <div class="export-option-card">
+            <h4>Full Raw Probe Logs (CSV)</h4>
+            <p>High-resolution probe-by-probe metrics across Gateway, ICMP, TCP, DNS, and HTTP.</p>
+            <a href="/api/export/samples.csv" target="_blank" class="btn btn-secondary">Download CSV</a>
+          </div>
+          <div class="export-option-card">
+            <h4>Minute Rollups (JSON)</h4>
+            <p>1-minute aggregated RTT, min, p50, p95, max, and jitter metrics for time-series analysis.</p>
+            <a href="/api/export/rollups.json" target="_blank" class="btn btn-secondary">Download JSON</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
