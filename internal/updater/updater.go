@@ -342,7 +342,16 @@ func (ptw *progressTrackingWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// ErrNoChecksum means the release had no usable SHA-256 for the asset.
+var ErrNoChecksum = errors.New("release has no checksum for this download; refusing to install an unverified update")
+
 func DownloadAndExtract(ctx context.Context, client *http.Client, assetURL string, targetDir string, expectedHash string, progressFn func(downloaded, total int64)) (string, error) {
+	// Refuse unverified updates. Releases publish checksums.txt; if it is
+	// missing or couldn't be fetched, it's safer to skip this update.
+	if expectedHash == "" {
+		return "", ErrNoChecksum
+	}
+
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Minute}
 	}

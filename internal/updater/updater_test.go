@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,8 +152,9 @@ func TestDownloadAndExtractZip(t *testing.T) {
 	defer ts.Close()
 
 	tmpDir := t.TempDir()
+	sum := sha256.Sum256(zipBuf.Bytes())
 	var progressCalled bool
-	extractedPath, err := updater.DownloadAndExtract(context.Background(), ts.Client(), ts.URL, tmpDir, "", func(down, tot int64) {
+	extractedPath, err := updater.DownloadAndExtract(context.Background(), ts.Client(), ts.URL, tmpDir, hex.EncodeToString(sum[:]), func(down, tot int64) {
 		progressCalled = true
 	})
 	if err != nil {
@@ -296,5 +298,22 @@ func TestManagerCheck(t *testing.T) {
 	}
 	if status.LatestVersion != "0.3.0" {
 		t.Fatalf("expected latest version 0.3.0, got %s", status.LatestVersion)
+	}
+}
+
+func TestDownloadRefusesMissingChecksum(t *testing.T) {
+	hits := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write(createFakePEPayload())
+	}))
+	defer ts.Close()
+
+	_, err := updater.DownloadAndExtract(context.Background(), ts.Client(), ts.URL, t.TempDir(), "", nil)
+	if !errors.Is(err, updater.ErrNoChecksum) {
+		t.Fatalf("expected ErrNoChecksum, got %v", err)
+	}
+	if hits != 0 {
+		t.Fatal("should refuse before downloading anything")
 	}
 }
