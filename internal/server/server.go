@@ -209,7 +209,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	htmlStr := strings.ReplaceAll(string(content), "{{CSRF_TOKEN}}", s.csrfToken)
+	htmlStr = strings.ReplaceAll(htmlStr, "{{VERSION}}", s.version)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	_, _ = w.Write([]byte(htmlStr))
 }
 
@@ -220,6 +222,7 @@ func (s *Server) handleStyles(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	_, _ = w.Write(content)
 }
 
@@ -230,6 +233,7 @@ func (s *Server) handleAppJS(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	_, _ = w.Write(content)
 }
 
