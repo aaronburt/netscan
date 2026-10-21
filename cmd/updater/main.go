@@ -24,7 +24,10 @@ func (m *multiStringFlag) Set(val string) error {
 	return nil
 }
 
+var version = "0.3.0"
+
 func main() {
+	versionFlag := flag.Bool("version", false, "print version")
 	pidFlag := flag.Int("pid", 0, "process id to wait for before replacing binary")
 	targetFlag := flag.String("target", "", "path to target executable")
 	sourceFlag := flag.String("source", "", "path to staged binary to install")
@@ -34,6 +37,11 @@ func main() {
 	var forwardArgs multiStringFlag
 	flag.Var(&forwardArgs, "arg", "argument to forward to relaunched binary")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("netscan-updater %s\n", version)
+		return
+	}
 
 	targetPath := *targetFlag
 	if targetPath == "" {
