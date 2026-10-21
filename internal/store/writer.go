@@ -103,6 +103,64 @@ func (w *StoreWriter) FlushSync() {
 	}
 }
 
+func (w *StoreWriter) ResetHistory() error {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	for {
+		select {
+		case <-w.inCh:
+		default:
+			goto drained
+		}
+	}
+drained:
+	w.rollups = make(map[rollupBucketKey]*rollupAccumulator)
+
+	tx, err := w.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	tables := []string{
+		"DELETE FROM events;",
+		"DELETE FROM event_samples;",
+		"DELETE FROM rollups_1m;",
+		"DELETE FROM system_events;",
+		"DELETE FROM coverage;",
+	}
+	for _, q := range tables {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+
+	rows, err := tx.Query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'samples_%';")
+	if err == nil {
+		var partTables []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err == nil {
+				partTables = append(partTables, name)
+			}
+		}
+		_ = rows.Close()
+
+		for _, pt := range partTables {
+			_, _ = tx.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s;", pt))
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	w.knownPartitions = make(map[string]bool)
+	_, _ = w.db.Exec("PRAGMA incremental_vacuum;")
+	return nil
+}
+
 func (w *StoreWriter) QueueSample(res probe.ProbeResult) {
 	item := writeItem{
 		itemType: writeItemSample,

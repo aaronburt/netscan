@@ -225,6 +225,23 @@ button,select,input{
   filter:brightness(1.08);
 }
 
+.btn-danger{
+  background:var(--bad);
+  border-color:var(--bad);
+  color:#ffffff;
+}
+
+.btn-danger:hover{
+  filter:brightness(1.12);
+}
+
+.reset-desc{
+  margin:0 0 16px;
+  color:var(--ink-2);
+  font-size:13px;
+  line-height:1.5;
+}
+
 .btn svg{
   flex:none;
 }

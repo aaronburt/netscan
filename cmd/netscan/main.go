@@ -27,7 +27,7 @@ import (
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
-var version = "0.4.1"
+var version = "0.4.2"
 
 func init() {
 	runtime.LockOSThread()
@@ -36,6 +36,7 @@ func init() {
 func main() {
 	checkUpdateFlag := flag.Bool("check-update", false, "check github for latest release")
 	updateFlag := flag.Bool("update", false, "download and install latest release if available")
+	resetFlag := flag.Bool("reset", false, "reset all timeline history and exit")
 	headlessFlag := flag.Bool("headless", false, "run without system tray in console mode")
 	configFlag := flag.String("config", "", "path to custom configuration file")
 	flag.Parse()
@@ -127,6 +128,24 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to relaunch executable: %v\n", err)
 			os.Exit(1)
 		}
+		os.Exit(0)
+	}
+
+	if *resetFlag {
+		winapi.AttachConsoleToParent()
+		cfg, _ := config.LoadConfig(*configFlag)
+		db, err := store.OpenDB(config.DBPath())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "netscan: failed to open database: %v\n", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		writer := store.NewStoreWriter(db, cfg)
+		if err := writer.ResetHistory(); err != nil {
+			fmt.Fprintf(os.Stderr, "netscan: failed to reset timeline history: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("NetScan timeline history successfully reset.")
 		os.Exit(0)
 	}
 
@@ -229,7 +248,7 @@ func main() {
 		}
 	})
 
-	srv, err := server.NewServer(cfg, storeReader, det, h, sched, netEnv, version)
+	srv, err := server.NewServer(cfg, storeReader, storeWriter, det, h, sched, netEnv, version)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)
@@ -372,6 +391,15 @@ func main() {
 			}
 			sched.Pause()
 			return true
+		},
+		func() {
+			if storeWriter != nil {
+				_ = storeWriter.ResetHistory()
+			}
+			if det != nil {
+				det.Reset()
+				h.PublishSnapshot(det.GetSnapshot())
+			}
 		},
 	)
 

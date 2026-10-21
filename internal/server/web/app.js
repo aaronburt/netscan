@@ -961,12 +961,63 @@ function waitForRestart() {
   }, 1000);
 }
 
+function setupResetManager() {
+  const rstModal = $('reset-modal');
+  const rstOpen = $('btn-reset-open');
+  const rstClose = $('rst-close');
+  const rstCancel = $('rst-cancel');
+  const rstConfirm = $('rst-confirm');
+
+  if (!rstModal) return;
+
+  rstOpen?.addEventListener('click', () => {
+    if (!rstModal.open) rstModal.showModal();
+  });
+  rstClose?.addEventListener('click', () => rstModal.close());
+  rstCancel?.addEventListener('click', () => rstModal.close());
+
+  rstConfirm?.addEventListener('click', async () => {
+    rstConfirm.disabled = true;
+    rstConfirm.textContent = 'Resetting...';
+    try {
+      const res = await fetch('/api/history/reset', {
+        method: 'POST',
+        headers: { 'X-NetScan-Token': csrfToken }
+      });
+      if (res.ok) {
+        events = [];
+        failedSamples = [];
+        const now = Date.now();
+        live = [];
+        for (let i = 0; i < 60; i++) {
+          const ts = now - (59 - i) * 1000;
+          const v = {};
+          SER.forEach(s => { v[s.id] = null; });
+          live.push({ ts: ts, v: v });
+        }
+        renderStatus();
+        renderHeat();
+        renderLog();
+        renderTiles();
+        renderChart();
+        rstModal.close();
+        fetchStatus();
+      }
+    } catch (_) {
+    } finally {
+      rstConfirm.disabled = false;
+      rstConfirm.textContent = 'Reset All Data';
+    }
+  });
+}
+
 function init() {
   setupTheme();
   setupExport();
   setupUpdateManager();
+  setupResetManager();
 
-  ['drawer', 'export', 'update-modal'].forEach(id => {
+  ['drawer', 'export', 'update-modal', 'reset-modal'].forEach(id => {
     const el = $(id);
     if (el) setupDialogBackdropDismiss(el);
   });

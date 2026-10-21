@@ -41,6 +41,7 @@ func setupTestServer(t *testing.T) (*server.Server, string) {
 	cfg.HTTP.Port = 19095
 
 	reader := store.NewStoreReader(db)
+	writer := store.NewStoreWriter(db, cfg)
 	det := detector.NewDetector(cfg, nil, nil)
 	h := hub.NewHub()
 	reg := probe.NewTargetRegistry(cfg)
@@ -48,7 +49,7 @@ func setupTestServer(t *testing.T) (*server.Server, string) {
 	sched := scheduler.NewScheduler(cfg, reg, outCh, "test", nil)
 	ne := netenv.NewNetEnv(reg, make(chan netenv.SystemEvent, 10))
 
-	srv, err := server.NewServer(cfg, reader, det, h, sched, ne, "test")
+	srv, err := server.NewServer(cfg, reader, writer, det, h, sched, ne, "test")
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -213,5 +214,39 @@ func TestServerUpdateEndpoints(t *testing.T) {
 	defer resCheck.Body.Close()
 	if resCheck.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resCheck.StatusCode)
+	}
+}
+
+func TestServerResetHistory(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	res, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("failed to fetch index: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	token := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, "csrf-token") {
+			parts := strings.Split(line, `content="`)
+			if len(parts) > 1 {
+				token = strings.Split(parts[1], `"`)[0]
+			}
+		}
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/history/reset", nil)
+	req.Header.Set("X-NetScan-Token", token)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("failed to post reset: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }

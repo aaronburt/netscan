@@ -19,16 +19,18 @@ type TrayManager struct {
 	updaterMgr    *updater.Manager
 	onExit        func()
 	onPauseToggle func() bool
+	onReset       func()
 	ready         bool
 }
 
-func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool) *TrayManager {
+func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool, onReset func()) *TrayManager {
 	return &TrayManager{
 		port:          port,
 		hub:           h,
 		updaterMgr:    updaterMgr,
 		onExit:        onExit,
 		onPauseToggle: onPauseToggle,
+		onReset:       onReset,
 	}
 }
 
@@ -68,6 +70,7 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 		mAutostart.Uncheck()
 	}
 
+	mReset := systray.AddMenuItem("Reset Timeline History...", "Clear all timeline and probe history")
 	mOpenFolder := systray.AddMenuItem("Open Data Folder", "Open logs and database location")
 
 	systray.AddSeparator()
@@ -154,6 +157,11 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 					mAutostart.Check()
 				} else {
 					mAutostart.Uncheck()
+				}
+
+			case <-mReset.ClickedCh:
+				if tm.onReset != nil {
+					tm.onReset()
 				}
 
 			case <-mOpenFolder.ClickedCh:

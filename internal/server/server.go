@@ -31,6 +31,7 @@ var webFS embed.FS
 type Server struct {
 	cfg         config.Config
 	storeReader *store.StoreReader
+	storeWriter *store.StoreWriter
 	detector    *detector.Detector
 	hub         *hub.Hub
 	scheduler   *scheduler.Scheduler
@@ -48,6 +49,7 @@ type Server struct {
 func NewServer(
 	cfg config.Config,
 	storeReader *store.StoreReader,
+	storeWriter *store.StoreWriter,
 	det *detector.Detector,
 	h *hub.Hub,
 	sched *scheduler.Scheduler,
@@ -61,6 +63,7 @@ func NewServer(
 	return &Server{
 		cfg:         cfg,
 		storeReader: storeReader,
+		storeWriter: storeWriter,
 		detector:    det,
 		hub:         h,
 		scheduler:   sched,
@@ -188,6 +191,32 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
+	mux.HandleFunc("/api/history/reset", s.handleResetHistory)
+}
+
+func (s *Server) handleResetHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.storeWriter != nil {
+		if err := s.storeWriter.ResetHistory(); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to reset history: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if s.detector != nil {
+		s.detector.Reset()
+		if s.hub != nil {
+			s.hub.PublishSnapshot(s.detector.GetSnapshot())
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ok":true,"message":"Timeline history successfully reset"}`))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

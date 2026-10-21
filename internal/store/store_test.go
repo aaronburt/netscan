@@ -178,3 +178,56 @@ func TestCompactorPreservesEventWindows(t *testing.T) {
 		t.Fatalf("expected tier event_window, got %s", detail.Samples[0].Tier)
 	}
 }
+
+func TestStoreResetHistory(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_reset.db")
+
+	db, err := store.OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := store.InitSchema(db); err != nil {
+		t.Fatalf("failed to init schema: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	writer := store.NewStoreWriter(db, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		_ = writer.Run(ctx)
+	}()
+	defer cancel()
+
+	dur := int64(2000)
+	evt := detector.Event{
+		ID:             1,
+		Kind:           detector.EventKindOutage,
+		Classification: "wan",
+		StartMS:        time.Now().UnixMilli() - 5000,
+		DurationMS:     &dur,
+	}
+	writer.QueueEvent(evt)
+	writer.FlushSync()
+
+	reader := store.NewStoreReader(db)
+	events, err := reader.QueryEvents(store.EventFilter{Limit: 10})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("expected events before reset")
+	}
+
+	if err := writer.ResetHistory(); err != nil {
+		t.Fatalf("ResetHistory failed: %v", err)
+	}
+
+	eventsAfter, err := reader.QueryEvents(store.EventFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("query after reset failed: %v", err)
+	}
+	if len(eventsAfter) != 0 {
+		t.Fatalf("expected 0 events after reset, got %d", len(eventsAfter))
+	}
+}

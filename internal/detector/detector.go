@@ -78,6 +78,26 @@ func (d *Detector) SetNetworkContext(networkID int64, isVPN bool, gwIP, ispHop, 
 	d.ssid = ssid
 }
 
+func (d *Detector) Reset() {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.state = StateHealthy
+	d.fastMode = false
+	d.consecAllUP = 0
+	d.openEvent = nil
+	d.lastEvent = nil
+	d.history120s = nil
+	d.singleHist = make(map[int][]probe.ProbeResult)
+	d.firstFailInDegraded = nil
+	d.lastFailInDegraded = nil
+	d.anyFailInDegraded = false
+	d.latencyTracker.Reset()
+	if d.onFastModeChange != nil {
+		d.onFastModeChange(false)
+	}
+}
+
 func (d *Detector) ProcessSystemEvent(evt netenv.SystemEvent) (*Event, *Event) {
 	d.lock.Lock()
 	defer d.lock.Unlock()

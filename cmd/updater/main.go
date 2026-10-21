@@ -24,7 +24,7 @@ func (m *multiStringFlag) Set(val string) error {
 	return nil
 }
 
-var version = "0.4.1"
+var version = "0.4.2"
 
 func main() {
 	versionFlag := flag.Bool("version", false, "print version")
