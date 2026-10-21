@@ -70,10 +70,58 @@ func (s *Scheduler) getInFlightCounter(targetID int) *atomic.Int32 {
 	return ctr
 }
 
+// gapSlack is how much later than expected a tick can run before we treat
+// the delay as the machine having slept.
+const gapSlack = 3 * time.Second
+
+// pacer keeps ticks on a fixed grid so probes don't drift, and spots
+// wall-clock gaps such as a suspend. The grid restarts whenever the interval
+// changes or monitoring resumes from a pause.
+type pacer struct {
+	start    time.Time
+	lastTick time.Time
+	tick     int64
+	interval time.Duration
+	synced   bool
+}
+
+// reset makes the next step start a fresh grid without reporting a gap.
+func (p *pacer) reset() {
+	p.synced = false
+}
+
+// step is called once per tick. It returns how long to wait before the next
+// tick and, if this tick came much later than expected, how long the gap was.
+func (p *pacer) step(now time.Time, interval time.Duration) (wait, gap time.Duration) {
+	if p.synced {
+		expected := max(interval, p.interval)
+		if d := now.Sub(p.lastTick); d > expected+gapSlack {
+			gap = d
+			p.synced = false
+		} else if interval != p.interval {
+			p.synced = false
+		}
+	}
+	if !p.synced {
+		p.start = now
+		p.tick = 0
+		p.interval = interval
+		p.synced = true
+	}
+	p.lastTick = now
+
+	p.tick++
+	next := p.start.Add(time.Duration(p.tick) * interval)
+	if now.Sub(next) > interval {
+		// We fell behind; skip the ticks we missed instead of bursting.
+		p.tick = int64(now.Sub(p.start)/interval) + 1
+		next = p.start.Add(time.Duration(p.tick) * interval)
+	}
+	return next.Sub(now), gap
+}
+
 func (s *Scheduler) Run(ctx context.Context) error {
-	start := time.Now()
-	tickCount := int64(0)
-	lastWall := start
+	var p pacer
 
 	for {
 		select {
@@ -83,6 +131,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 
 		if s.paused.Load() {
+			// Time spent paused is not a gap.
+			p.reset()
 			select {
 			case <-ctx.Done():
 				return nil
@@ -98,33 +148,18 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		interval := time.Duration(intervalMS) * time.Millisecond
 
-		tickCount++
-		nextDeadline := start.Add(time.Duration(tickCount) * interval)
-		now := time.Now()
-
-		wallDiff := now.Sub(lastWall)
-		lastWall = now
-		if wallDiff > interval+3*time.Second {
-			if s.onGap != nil {
-				s.onGap(wallDiff)
-			}
-			start = now
-			tickCount = 0
-			nextDeadline = start.Add(interval)
-		} else if now.After(nextDeadline.Add(interval)) {
-			missedTicks := int64(now.Sub(start) / interval)
-			tickCount = missedTicks
-			nextDeadline = start.Add(time.Duration(tickCount) * interval)
+		wait, gap := p.step(time.Now(), interval)
+		if gap > 0 && s.onGap != nil {
+			s.onGap(gap)
 		}
 
-		s.dispatchTick(ctx, isFast, interval, tickCount)
+		s.dispatchTick(ctx, isFast, interval, p.tick)
 
-		sleepDur := time.Until(nextDeadline)
-		if sleepDur > 0 {
+		if wait > 0 {
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(sleepDur):
+			case <-time.After(wait):
 			}
 		}
 	}
@@ -146,63 +181,42 @@ func (s *Scheduler) dispatchTick(ctx context.Context, isFast bool, interval time
 
 	s.launchBatch(ctx, icmpTargets, s.runICMP, isFast)
 
+	// Pick this tick's targets now, on the Run goroutine, so the round-robin
+	// counters are only ever touched here.
+	dnsTargets := s.pickTargets(s.registry.GetDNS(), &s.dnsIdx, isFast)
+	tcpTargets := s.pickTargets(s.registry.GetWANTCP(), &s.tcpIdx, isFast)
+	var httpTargets []probe.Target
+	if !isFast || tickNum%2 == 0 {
+		httpTargets = s.pickTargets(s.registry.GetHTTP(), &s.httpIdx, isFast)
+	}
+
+	s.launchAfter(ctx, staggerStep, dnsTargets, s.runDNS, isFast)
+	s.launchAfter(ctx, 2*staggerStep, tcpTargets, s.runTCP, isFast)
+	s.launchAfter(ctx, 3*staggerStep, httpTargets, s.runHTTP, isFast)
+}
+
+// pickTargets returns every target in fast mode, or the next one in turn
+// otherwise.
+func (s *Scheduler) pickTargets(all []probe.Target, idx *int, isFast bool) []probe.Target {
+	if len(all) == 0 || isFast {
+		return all
+	}
+	t := all[*idx%len(all)]
+	*idx++
+	return []probe.Target{t}
+}
+
+func (s *Scheduler) launchAfter(ctx context.Context, delay time.Duration, targets []probe.Target, fn func(context.Context, probe.Target, bool), isFast bool) {
+	if len(targets) == 0 {
+		return
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(staggerStep):
+		case <-time.After(delay):
 		}
-
-		allDNS := s.registry.GetDNS()
-		if len(allDNS) > 0 {
-			if isFast {
-				s.launchBatch(ctx, allDNS, s.runDNS, isFast)
-			} else {
-				idx := s.dnsIdx % len(allDNS)
-				s.dnsIdx++
-				s.launchBatch(ctx, []probe.Target{allDNS[idx]}, s.runDNS, isFast)
-			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * staggerStep):
-		}
-
-		allTCP := s.registry.GetWANTCP()
-		if len(allTCP) > 0 {
-			if isFast {
-				s.launchBatch(ctx, allTCP, s.runTCP, isFast)
-			} else {
-				idx := s.tcpIdx % len(allTCP)
-				s.tcpIdx++
-				s.launchBatch(ctx, []probe.Target{allTCP[idx]}, s.runTCP, isFast)
-			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(3 * staggerStep):
-		}
-
-		allHTTP := s.registry.GetHTTP()
-		if len(allHTTP) > 0 {
-			if isFast {
-				if tickNum%2 == 0 {
-					s.launchBatch(ctx, allHTTP, s.runHTTP, isFast)
-				}
-			} else {
-				idx := s.httpIdx % len(allHTTP)
-				s.httpIdx++
-				s.launchBatch(ctx, []probe.Target{allHTTP[idx]}, s.runHTTP, isFast)
-			}
-		}
+		s.launchBatch(ctx, targets, fn, isFast)
 	}()
 }
 
