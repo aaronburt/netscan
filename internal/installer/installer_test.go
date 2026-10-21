@@ -4,6 +4,7 @@ package installer_test
 
 import (
 	"archive/zip"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,24 +89,60 @@ func TestExtractPayloadFromDirectory(t *testing.T) {
 	}
 }
 
-func TestOpenDistInstallerZip(t *testing.T) {
-	zr, err := zip.OpenReader("../../dist/netscan-installer.exe")
+// The release installer is installer.exe with the payload zip appended
+// (copy /b installer-base.exe+netscan-windows-amd64.zip). This builds the
+// same layout in a temp file, so the test doesn't depend on a local dist/
+// build, and checks the payload can be read back.
+func TestOpenAppendedInstallerZip(t *testing.T) {
+	var zipBuf bytes.Buffer
+	zw := zip.NewWriter(&zipBuf)
+	for _, name := range []string{"netscan.exe", "updater.exe"} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(createFakeExe(4096)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "netscan-installer.exe")
+	combined := append(createFakeExe(64*1024), zipBuf.Bytes()...)
+	if err := os.WriteFile(path, combined, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	zr, err := zip.OpenReader(path)
 	if err != nil {
-		t.Fatalf("zip.OpenReader on dist/netscan-installer.exe failed: %v", err)
+		t.Fatalf("zip.OpenReader on appended installer failed: %v", err)
 	}
 	defer zr.Close()
-	t.Logf("found %d entries in dist/netscan-installer.exe", len(zr.File))
+	found := map[string]bool{}
 	for _, f := range zr.File {
-		t.Logf("entry: %s (size: %d)", f.Name, f.UncompressedSize64)
+		found[f.Name] = true
+	}
+	if !found["netscan.exe"] || !found["updater.exe"] {
+		t.Fatalf("payload entries missing, got %v", found)
 	}
 }
 
 func TestInstall(t *testing.T) {
+	// Run from a directory holding the payload, the same fallback the
+	// installer uses when it has no embedded zip.
+	srcDir := t.TempDir()
+	for _, name := range []string{"netscan.exe", "updater.exe"} {
+		if err := os.WriteFile(filepath.Join(srcDir, name), createFakeExe(1024*600), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	origDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir("../.."); err != nil {
+	if err := os.Chdir(srcDir); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origDir) }()
