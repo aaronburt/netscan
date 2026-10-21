@@ -26,7 +26,7 @@ import (
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
-var version = "0.1.0-dev"
+var version = "0.2.0"
 
 func init() {
 	runtime.LockOSThread()
