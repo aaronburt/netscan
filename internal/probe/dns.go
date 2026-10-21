@@ -25,10 +25,7 @@ func ProbeDNS(target Target, queryName string, timeout time.Duration, seq uint64
 	c.Net = "udp"
 	c.Timeout = timeout
 
-	addr := target.Address
-	if !strings.Contains(addr, ":") {
-		addr = net.JoinHostPort(addr, "53")
-	}
+	addr := WithDefaultPort(target.Address, "53")
 
 	start := time.Now()
 	r, rtt, err := c.Exchange(m, addr)
