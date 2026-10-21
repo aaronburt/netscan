@@ -242,3 +242,87 @@ func TestSuspendClosesEventAsInterrupted(t *testing.T) {
 		t.Fatalf("expected EventFlagInterrupted to be set")
 	}
 }
+
+// A single failed probe used to be dropped when the detector went from
+// healthy to degraded, so a one-probe drop produced no blip event.
+func TestSingleFailedProbeRecordsBlip(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	failAt := clock.Now().UnixMilli()
+	d.ProcessProbe(makeProbe(10, probe.LayerWANICMP, false, clock))
+	if snap := d.GetSnapshot(); snap.State != detector.StateDegraded {
+		t.Fatalf("state = %s, want degraded", snap.StateString)
+	}
+
+	var created *detector.Event
+	for i := 0; i < 4 && created == nil; i++ {
+		clock.Advance(500 * time.Millisecond)
+		created, _ = sendTick(d, clock, true, true, true)
+	}
+	if created == nil || created.Kind != detector.EventKindBlip {
+		t.Fatalf("expected a blip event, got %+v", created)
+	}
+	if created.StartMS != failAt {
+		t.Fatalf("blip start = %d, want the failed probe's time %d", created.StartMS, failAt)
+	}
+}
+
+// Layer status used to be computed from a fixed list of ids, so targets
+// beyond the third in a layer were probed but ignored.
+func TestExtraTargetsCountTowardsLayer(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+
+	d.ProcessProbe(makeProbe(1000, probe.LayerDNS, false, clock))
+	snap := d.GetSnapshot()
+	if got := snap.LayerStatuses[probe.LayerDNS]; got != detector.LayerStatusDown {
+		t.Fatalf("DNS layer = %v, want down", got)
+	}
+}
+
+// Snapshots are marshalled on other goroutines, so they must not share the
+// detector's live event.
+func TestSnapshotEventsAreCopies(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+	for i := 0; i < 3; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, false, false, true)
+	}
+	snap := d.GetSnapshot()
+	if snap.OpenEvent == nil {
+		t.Fatal("expected an open outage")
+	}
+
+	for i := 0; i < 5; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, true, true, true)
+	}
+	if after := d.GetSnapshot(); after.OpenEvent != nil {
+		t.Fatal("expected the outage to be closed")
+	}
+	if snap.OpenEvent.EndMS != nil {
+		t.Fatal("closing the event changed an earlier snapshot")
+	}
+}
+
+func TestSetNextEventID(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	d.SetNextEventID(42)
+	sendTick(d, clock, true, true, true)
+	clock.Advance(time.Second)
+	sendTick(d, clock, false, false, true)
+	clock.Advance(500 * time.Millisecond)
+	created, _ := sendTick(d, clock, false, false, true)
+	if snap := d.GetSnapshot(); snap.OpenEvent != nil {
+		created = snap.OpenEvent
+	}
+	if created == nil || created.ID != 42 {
+		t.Fatalf("event = %+v, want id 42", created)
+	}
+}

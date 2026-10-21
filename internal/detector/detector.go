@@ -99,9 +99,7 @@ func (d *Detector) Reset() {
 	d.lastEvent = nil
 	d.history120s = nil
 	d.singleHist = make(map[int][]probe.ProbeResult)
-	d.firstFailInDegraded = nil
-	d.lastFailInDegraded = nil
-	d.anyFailInDegraded = false
+	d.clearFailTracking()
 	d.latencyTracker.Reset()
 	if d.onFastModeChange != nil {
 		d.onFastModeChange(false)
@@ -119,10 +117,11 @@ func (d *Detector) ProcessSystemEvent(evt netenv.SystemEvent) (*Event, *Event) {
 		d.state = StateSuspended
 		if d.openEvent != nil {
 			closed := d.closeOpenEvent(now, true)
-			return nil, closed
+			return nil, closed.Clone()
 		}
 	case netenv.SysEventResume:
 		d.state = StateHealthy
+		d.clearFailTracking()
 		d.postResumeUntil = now.Add(time.Duration(d.cfg.PostResumeGraceS) * time.Second)
 		d.history120s = nil
 	case netenv.SysEventNetworkChange, netenv.SysEventGatewayChange:
@@ -175,7 +174,7 @@ func (d *Detector) ProcessProbe(res probe.ProbeResult) (probe.ProbeResult, *Even
 
 	if res.OK {
 		d.lastGoodSample[res.Target.Layer] = now
-	} else {
+	} else if res.Target.Layer != probe.LayerISPHop {
 		if d.firstFailInDegraded == nil {
 			d.firstFailInDegraded = &res
 		}
@@ -186,7 +185,7 @@ func (d *Detector) ProcessProbe(res probe.ProbeResult) (probe.ProbeResult, *Even
 	d.evaluateLayers(now)
 	created, closed := d.transitionOnProbe(now, isLatency || rebaselined)
 
-	return res, created, closed
+	return res, created.Clone(), closed.Clone()
 }
 
 func (d *Detector) Tick(now time.Time) (*Event, *Event) {
@@ -194,7 +193,8 @@ func (d *Detector) Tick(now time.Time) (*Event, *Event) {
 	defer d.lock.Unlock()
 
 	d.evaluateLayers(now)
-	return d.transitionOnTick(now)
+	created, closed := d.transitionOnTick(now)
+	return created.Clone(), closed.Clone()
 }
 
 func (d *Detector) evaluateLayers(now time.Time) {
@@ -203,20 +203,12 @@ func (d *Detector) evaluateLayers(now time.Time) {
 		maxAge = 3 * time.Duration(d.cfg.Intervals.FastMS) * time.Millisecond
 	}
 
-	d.layerStatuses[probe.LayerGateway] = d.evalSingleTargetLayer(1, maxAge, now)
-	d.layerStatuses[probe.LayerISPHop] = d.evalSingleTargetLayer(2, maxAge, now)
+	d.layerStatuses[probe.LayerGateway] = d.evalSingleTargetLayer(probe.GatewayTargetID, maxAge, now)
+	d.layerStatuses[probe.LayerISPHop] = d.evalSingleTargetLayer(probe.ISPHopTargetID, maxAge, now)
 
-	wanICMPTargets := []int{10, 11, 12}
-	d.layerStatuses[probe.LayerWANICMP] = d.evalMultiTargetLayer(wanICMPTargets, maxAge, now)
-
-	wanTCPTargets := []int{20, 21, 22}
-	d.layerStatuses[probe.LayerWANTCP] = d.evalMultiTargetLayer(wanTCPTargets, maxAge, now)
-
-	dnsTargets := []int{30, 31, 32, 40, 41, 42}
-	d.layerStatuses[probe.LayerDNS] = d.evalMultiTargetLayer(dnsTargets, maxAge, now)
-
-	httpTargets := []int{50, 51, 52}
-	d.layerStatuses[probe.LayerHTTP] = d.evalMultiTargetLayer(httpTargets, maxAge, now)
+	for _, layer := range []probe.Layer{probe.LayerWANICMP, probe.LayerWANTCP, probe.LayerDNS, probe.LayerHTTP} {
+		d.layerStatuses[layer] = d.evalMultiTargetLayer(layer, maxAge, now)
+	}
 }
 
 func (d *Detector) evalSingleTargetLayer(targetID int, maxAge time.Duration, now time.Time) LayerStatus {
@@ -240,13 +232,14 @@ func (d *Detector) evalSingleTargetLayer(targetID int, maxAge time.Duration, now
 	return LayerStatusSuspect
 }
 
-func (d *Detector) evalMultiTargetLayer(targetIDs []int, maxAge time.Duration, now time.Time) LayerStatus {
+// evalMultiTargetLayer looks at the latest result of every target in the
+// layer, however many the config defines.
+func (d *Detector) evalMultiTargetLayer(layer probe.Layer, maxAge time.Duration, now time.Time) LayerStatus {
 	activeCount := 0
 	failCount := 0
 
-	for _, id := range targetIDs {
-		res, ok := d.latestResults[id]
-		if !ok {
+	for _, res := range d.latestResults {
+		if res.Target.Layer != layer {
 			continue
 		}
 		if now.Sub(time.UnixMilli(res.SendTimeUTC)) > maxAge {
@@ -333,9 +326,8 @@ func (d *Detector) transitionOnProbe(now time.Time, hasLatency bool) (*Event, *E
 			d.switchFastMode(true)
 			d.state = StateDegraded
 			d.consecAllUP = 0
-			d.firstFailInDegraded = nil
-			d.lastFailInDegraded = nil
-			d.anyFailInDegraded = false
+			// Keep the failure that triggered this; the trackers were
+			// cleared when we last became healthy.
 		}
 	case StateDegraded:
 		if anyDown {
@@ -390,9 +382,7 @@ func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
 			if d.anyFailInDegraded {
 				created = d.createBlipEvent(now)
 			}
-			d.firstFailInDegraded = nil
-			d.lastFailInDegraded = nil
-			d.anyFailInDegraded = false
+			d.clearFailTracking()
 			return created, nil
 		}
 	case StateOutage:
@@ -410,6 +400,7 @@ func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
 			d.state = StateHealthy
 			d.switchFastMode(false)
 			closed := d.closeOpenEvent(now, false)
+			d.clearFailTracking()
 			return nil, closed
 		}
 	case StateSuspended:
@@ -421,10 +412,19 @@ func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
 		} else if d.consecAllUP >= 3 {
 			d.state = StateHealthy
 			d.switchFastMode(false)
+			d.clearFailTracking()
 		}
 	}
 
 	return nil, nil
+}
+
+// clearFailTracking forgets failures from the last episode so the next one
+// starts fresh.
+func (d *Detector) clearFailTracking() {
+	d.firstFailInDegraded = nil
+	d.lastFailInDegraded = nil
+	d.anyFailInDegraded = false
 }
 
 func (d *Detector) switchFastMode(fast bool) {
@@ -667,7 +667,9 @@ func (d *Detector) GetSnapshot() Snapshot {
 		FastMode:      d.fastMode,
 		LayerStatuses: layerStatusesCopy,
 		LatestRTTUS:   rttCopy,
-		OpenEvent:     d.openEvent,
-		LastEvent:     d.lastEvent,
+		// Copies, so callers can marshal them while the detector keeps
+		// updating its own.
+		OpenEvent: d.openEvent.Clone(),
+		LastEvent: d.lastEvent.Clone(),
 	}
 }

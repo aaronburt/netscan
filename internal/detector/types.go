@@ -118,6 +118,26 @@ type Event struct {
 	ContextJSON    string         `json:"context,omitempty"`
 }
 
+// Clone returns a deep copy of e, or nil when e is nil.
+func (e *Event) Clone() *Event {
+	if e == nil {
+		return nil
+	}
+	c := *e
+	c.EndMS = clonePtr(e.EndMS)
+	c.EndUncertMS = clonePtr(e.EndUncertMS)
+	c.DurationMS = clonePtr(e.DurationMS)
+	return &c
+}
+
+func clonePtr(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 type Snapshot struct {
 	TimestampMS   int64                       `json:"ts_ms"`
 	State         State                       `json:"state"`
