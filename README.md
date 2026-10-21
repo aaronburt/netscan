@@ -86,3 +86,14 @@ Or run the standalone updater helper in the `dist\` folder (pulls latest release
 ```powershell
 .\dist\updater.exe
 ```
+
+## Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please). Use [Conventional Commits](https://www.conventionalcommits.org/) on `main`:
+
+- `fix: ...` bumps the patch version (0.4.2 → 0.4.3)
+- `feat: ...` bumps the minor version (0.4.2 → 0.5.0)
+- `feat!: ...` or a `BREAKING CHANGE:` footer marks a breaking change (bumps minor while below 1.0)
+- `chore:`, `docs:`, `ci:`, `refactor:`, `test:` don't trigger a release
+
+On each push to `main`, a release PR is kept up to date with the next version and changelog. Merging it tags the release, creates the GitHub Release, and uploads the Windows build (`netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `checksums.txt`).

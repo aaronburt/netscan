@@ -2,58 +2,73 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
-    name: Build & Publish Release
-    runs-on: windows-latest
-
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+  build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build binaries
-        run: |
-          $ver = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "0.4.2" }
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          go build -v -ldflags "-H=windowsgui -X main.version=$ver" -o dist/netscan.exe ./cmd/netscan
-          go build -v -ldflags "-s -w -X main.version=$ver" -o dist/updater.exe ./cmd/updater
-          go build -v -ldflags "-s -w -H=windowsgui -X main.version=$ver" -o dist/installer-base.exe ./cmd/installer
+      - name: Test
+        run: go test ./...
 
-      - name: Package archive and installer
+      - name: Build
         run: |
-          Compress-Archive -Path dist/netscan.exe, dist/updater.exe -DestinationPath dist/netscan-windows-amd64.zip
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $v = "-X main.version=$env:VERSION"
+          go build -ldflags "-H=windowsgui $v" -o dist\netscan.exe ./cmd/netscan
+          go build -ldflags "-s -w $v" -o dist\updater.exe ./cmd/updater
+          go build -ldflags "-s -w -H=windowsgui $v" -o dist\installer-base.exe ./cmd/installer
+
+      - name: Package
+        run: |
+          Compress-Archive -Path dist\netscan.exe, dist\updater.exe -DestinationPath dist\netscan-windows-amd64.zip -Force
           cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netscan-installer.exe
-          Remove-Item dist/installer-base.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item dist\installer-base.exe
+          Push-Location dist
+          Get-ChildItem netscan.exe, updater.exe, netscan-windows-amd64.zip, netscan-installer.exe |
+            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name } |
+            Set-Content -Encoding ascii checksums.txt
+          Pop-Location
 
-      - name: Generate checksums
+      - name: Upload release assets
         run: |
-          $files = @("netscan.exe", "updater.exe", "netscan-windows-amd64.zip", "netscan-installer.exe")
-          $lines = foreach ($f in $files) {
-            $h = (Get-FileHash -Path "dist/$f" -Algorithm SHA256).Hash.ToLower()
-            "$h  $f"
-          }
-          $lines | Set-Content -Path "dist/checksums.txt" -Encoding ascii
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/netscan.exe
-            dist/updater.exe
-            dist/netscan-windows-amd64.zip
-            dist/netscan-installer.exe
-            dist/checksums.txt
-          generate_release_notes: true
+          gh release upload $env:TAG `
+            dist\netscan.exe `
+            dist\netscan-windows-amd64.zip `
+            dist\netscan-installer.exe `
+            dist\updater.exe `
+            dist\checksums.txt --clobber

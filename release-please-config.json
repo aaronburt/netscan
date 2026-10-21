@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "netscan",
+      "bump-minor-pre-major": true,
+      "include-component-in-tag": false,
+      "extra-files": [
+        "cmd/netscan/main.go",
+        "cmd/updater/main.go",
+        "cmd/installer/main.go"
+      ]
+    }
+  }
+}
