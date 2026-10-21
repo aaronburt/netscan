@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        run: |
+          $ver = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "0.1.0" }
+          go build -v -ldflags "-H=windowsgui -X main.version=$ver" -o netscan.exe ./cmd/netscan
+
+      - name: Package archive
+        run: |
+          Compress-Archive -Path netscan.exe -DestinationPath netscan-windows-amd64.zip
+
+      - name: Generate checksums
+        run: |
+          $files = @("netscan.exe", "netscan-windows-amd64.zip")
+          $lines = foreach ($f in $files) {
+            $h = (Get-FileHash -Path $f -Algorithm SHA256).Hash.ToLower()
+            "$h  $f"
+          }
+          $lines | Set-Content -Path "checksums.txt" -Encoding ascii
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            netscan.exe
+            netscan-windows-amd64.zip
+            checksums.txt
+          generate_release_notes: true

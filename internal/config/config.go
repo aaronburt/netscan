@@ -64,6 +64,12 @@ type RetentionConfig struct {
 	MinFreeDiskMB   int `json:"min_free_disk_mb"`
 }
 
+type UpdateConfig struct {
+	CheckOnStartup bool   `json:"check_on_startup"`
+	AutoCheckHours int    `json:"auto_check_hours"`
+	Repo           string `json:"repo"`
+}
+
 type Config struct {
 	HTTP             HTTPConfig      `json:"http"`
 	Intervals        IntervalsConfig `json:"intervals"`
@@ -72,6 +78,7 @@ type Config struct {
 	Latency          LatencyConfig   `json:"latency"`
 	Retention        RetentionConfig `json:"retention"`
 	PostResumeGraceS int             `json:"post_resume_grace_s"`
+	Update           UpdateConfig    `json:"update"`
 }
 
 func DefaultConfig() Config {
@@ -147,6 +154,11 @@ func DefaultConfig() Config {
 			MinFreeDiskMB:   1024,
 		},
 		PostResumeGraceS: 20,
+		Update: UpdateConfig{
+			CheckOnStartup: true,
+			AutoCheckHours: 24,
+			Repo:           "aaronburt/netscan",
+		},
 	}
 }
 
@@ -255,6 +267,12 @@ func (c *Config) ValidateAndApplyMinimums() {
 	}
 	if c.PostResumeGraceS < 5 {
 		c.PostResumeGraceS = d.PostResumeGraceS
+	}
+	if c.Update.Repo == "" {
+		c.Update.Repo = d.Update.Repo
+	}
+	if c.Update.AutoCheckHours < 0 {
+		c.Update.AutoCheckHours = d.Update.AutoCheckHours
 	}
 }
 

@@ -9,6 +9,7 @@ A lightweight Windows internet stability monitor designed to detect micro-drops,
 - **System Tray Integration**: Background monitoring with dynamic status icon.
 - **Web Dashboard**: Built-in UI for inspecting latency, outages, and event timelines.
 - **Telemetry & Exports**: SQLite-backed history with exportable reports.
+- **Self-Updating**: Direct GitHub release checking, background notifications, and one-click in-place updates.
 
 ## Build
 
@@ -37,4 +38,18 @@ Open the dashboard in your browser:
 
 ```powershell
 .\netscan.exe -config path\to\config.json
+```
+
+### Checking & Installing Updates
+
+Check GitHub for available releases:
+
+```powershell
+.\netscan.exe -check-update
+```
+
+Download and apply latest update directly:
+
+```powershell
+.\netscan.exe -update
 ```

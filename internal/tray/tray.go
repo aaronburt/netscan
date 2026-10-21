@@ -9,20 +9,23 @@ import (
 	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/detector"
 	"github.com/aaronburt/netscan/internal/hub"
+	"github.com/aaronburt/netscan/internal/updater"
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
 type TrayManager struct {
 	port          int
 	hub           *hub.Hub
+	updaterMgr    *updater.Manager
 	onExit        func()
 	onPauseToggle func() bool
 }
 
-func NewTrayManager(port int, h *hub.Hub, onExit func(), onPauseToggle func() bool) *TrayManager {
+func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool) *TrayManager {
 	return &TrayManager{
 		port:          port,
 		hub:           h,
+		updaterMgr:    updaterMgr,
 		onExit:        onExit,
 		onPauseToggle: onPauseToggle,
 	}
@@ -50,6 +53,7 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 	mOpen := systray.AddMenuItem("Open Dashboard", "Open browser dashboard")
 	mExportReport := systray.AddMenuItem("Export ISP Report (Last 7 Days)", "Download plain-text evidence report")
 	mExportCSV := systray.AddMenuItem("Export Outages (CSV)", "Download CSV of outages")
+	mUpdate := systray.AddMenuItem("Check for Updates...", "Check GitHub for new NetScan releases")
 
 	systray.AddSeparator()
 
@@ -69,6 +73,18 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 	mExit := systray.AddMenuItem("Exit NetScan", "Stop monitoring and quit")
 
 	sub := tm.hub.Subscribe()
+
+	if tm.updaterMgr != nil {
+		tm.updaterMgr.SetOnStatusChange(func(st updater.StatusResponse) {
+			if st.State == updater.StateAvailable && st.Release != nil {
+				mUpdate.SetTitle(fmt.Sprintf("Update Available: %s", st.Release.Version))
+			} else if st.State == updater.StateReadyToRestart {
+				mUpdate.SetTitle("Update Ready (Restart Required)")
+			} else if st.State == updater.StateUpToDate {
+				mUpdate.SetTitle("NetScan is Up to Date")
+			}
+		})
+	}
 
 	go func() {
 		defer tm.hub.Unsubscribe(sub)
@@ -101,6 +117,10 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 
 			case <-mOpen.ClickedCh:
 				url := fmt.Sprintf("http://127.0.0.1:%d", tm.port)
+				_ = winapi.OpenDashboard(url)
+
+			case <-mUpdate.ClickedCh:
+				url := fmt.Sprintf("http://127.0.0.1:%d/#update", tm.port)
 				_ = winapi.OpenDashboard(url)
 
 			case <-mExportReport.ClickedCh:

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"github.com/aaronburt/netscan/internal/netenv"
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/store"
+	"github.com/aaronburt/netscan/internal/updater"
 )
 
 //go:embed web/*
@@ -33,6 +35,7 @@ type Server struct {
 	hub         *hub.Hub
 	scheduler   *scheduler.Scheduler
 	netEnv      *netenv.NetEnv
+	updaterMgr  *updater.Manager
 	version     string
 
 	port      int
@@ -71,6 +74,12 @@ func (s *Server) Port() int {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	return s.port
+}
+
+func (s *Server) SetUpdaterManager(mgr *updater.Manager) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.updaterMgr = mgr
 }
 
 func (s *Server) Start() error {
@@ -175,6 +184,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/export/samples.csv", s.handleExportSamplesCSV)
 	mux.HandleFunc("/api/export/rollups.csv", s.handleExportRollupsCSV)
 	mux.HandleFunc("/api/export/rollups.json", s.handleExportRollupsJSON)
+	mux.HandleFunc("/api/update/status", s.handleUpdateStatus)
+	mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
+	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -442,4 +455,88 @@ func (s *Server) handleExportRollupsJSON(w http.ResponseWriter, _ *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"netscan-rollups-7d.json\"")
 	_ = export.ExportJSON(w, meta, rollups)
+}
+
+func (s *Server) handleUpdateStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	s.lock.Lock()
+	mgr := s.updaterMgr
+	s.lock.Unlock()
+
+	if mgr == nil {
+		_ = json.NewEncoder(w).Encode(updater.StatusResponse{
+			State:          updater.StateIdle,
+			CurrentVersion: s.version,
+		})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(mgr.Status())
+}
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.lock.Lock()
+	mgr := s.updaterMgr
+	s.lock.Unlock()
+
+	if mgr == nil {
+		http.Error(w, "Updater not initialized", http.StatusBadRequest)
+		return
+	}
+
+	_, _ = mgr.Check(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(mgr.Status())
+}
+
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.lock.Lock()
+	mgr := s.updaterMgr
+	s.lock.Unlock()
+
+	if mgr == nil {
+		http.Error(w, "Updater not initialized", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		_ = mgr.Apply(context.Background())
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(mgr.Status())
+}
+
+func (s *Server) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.lock.Lock()
+	mgr := s.updaterMgr
+	s.lock.Unlock()
+
+	if mgr == nil {
+		http.Error(w, "Updater not initialized", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "restarting"})
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_ = mgr.Restart()
+	}()
 }

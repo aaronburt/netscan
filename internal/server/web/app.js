@@ -36,6 +36,23 @@ const dom = {
   exportModal: document.getElementById('export-modal'),
   exportBackdrop: document.getElementById('export-backdrop'),
   btnCloseExport: document.getElementById('btn-close-export'),
+  btnUpdateMenu: document.getElementById('btn-update-menu'),
+  updateDot: document.getElementById('update-dot'),
+  btnUpdateText: document.getElementById('btn-update-text'),
+  updateModal: document.getElementById('update-modal'),
+  updateBackdrop: document.getElementById('update-backdrop'),
+  btnCloseUpdate: document.getElementById('btn-close-update'),
+  updateCurrentVersion: document.getElementById('update-current-version'),
+  updateLatestVersion: document.getElementById('update-latest-version'),
+  updateStatusMsg: document.getElementById('update-status-msg'),
+  updateNotesSection: document.getElementById('update-release-notes-section'),
+  updateNotesBody: document.getElementById('update-notes-body'),
+  updateProgressContainer: document.getElementById('update-progress-container'),
+  updateProgressFill: document.getElementById('update-progress-fill'),
+  updateProgressLabel: document.getElementById('update-progress-label'),
+  btnCheckUpdates: document.getElementById('btn-check-updates'),
+  btnInstallUpdate: document.getElementById('btn-install-update'),
+  btnRestartApp: document.getElementById('btn-restart-app'),
 };
 
 function init() {
@@ -46,6 +63,7 @@ function init() {
   fetchInitialData();
   fetchEvents();
   fetchTimelineRollups();
+  checkUpdateStatus();
 
   window.addEventListener('resize', () => {
     setupCanvas(dom.liveCanvas);
@@ -60,6 +78,22 @@ function setupEventListeners() {
   dom.btnExportMenu.addEventListener('click', () => dom.exportModal.classList.remove('hidden'));
   dom.btnCloseExport.addEventListener('click', () => dom.exportModal.classList.add('hidden'));
   dom.exportBackdrop.addEventListener('click', () => dom.exportModal.classList.add('hidden'));
+
+  dom.btnUpdateMenu.addEventListener('click', () => {
+    dom.updateModal.classList.remove('hidden');
+    checkUpdateStatus();
+  });
+  dom.btnCloseUpdate.addEventListener('click', () => dom.updateModal.classList.add('hidden'));
+  dom.updateBackdrop.addEventListener('click', () => dom.updateModal.classList.add('hidden'));
+
+  dom.btnCheckUpdates.addEventListener('click', triggerUpdateCheck);
+  dom.btnInstallUpdate.addEventListener('click', triggerUpdateInstall);
+  dom.btnRestartApp.addEventListener('click', triggerUpdateRestart);
+
+  if (window.location.hash === '#update') {
+    dom.updateModal.classList.remove('hidden');
+    checkUpdateStatus();
+  }
 
   dom.btnCloseModal.addEventListener('click', () => dom.drilldownModal.classList.add('hidden'));
   dom.modalBackdrop.addEventListener('click', () => dom.drilldownModal.classList.add('hidden'));
@@ -349,6 +383,164 @@ async function togglePause() {
       dom.btnPause.textContent = state.isPaused ? 'Resume' : 'Pause';
     }
   } catch (_) {}
+}
+
+async function checkUpdateStatus() {
+  try {
+    const res = await fetch('/api/update/status');
+    const data = await res.json();
+    renderUpdateUI(data);
+  } catch (_) {}
+}
+
+function renderUpdateUI(data) {
+  if (!data) return;
+
+  dom.updateCurrentVersion.textContent = data.current_version || '--';
+  dom.updateLatestVersion.textContent = data.latest_version || '--';
+
+  if (data.update_available) {
+    dom.updateDot.classList.remove('hidden');
+    dom.btnUpdateText.textContent = `Update: v${data.latest_version}`;
+  } else {
+    dom.updateDot.classList.add('hidden');
+    dom.btnUpdateText.textContent = 'Updates';
+  }
+
+  if (data.release && data.release.body) {
+    dom.updateNotesBody.textContent = data.release.body;
+    dom.updateNotesSection.classList.remove('hidden');
+  } else {
+    dom.updateNotesSection.classList.add('hidden');
+  }
+
+  dom.btnCheckUpdates.disabled = false;
+  dom.btnCheckUpdates.textContent = 'Check Now';
+
+  if (data.state === 'checking') {
+    dom.updateStatusMsg.textContent = 'Checking for updates...';
+    dom.btnCheckUpdates.disabled = true;
+    dom.btnCheckUpdates.textContent = 'Checking...';
+    dom.btnInstallUpdate.classList.add('hidden');
+    dom.btnRestartApp.classList.add('hidden');
+    dom.updateProgressContainer.classList.add('hidden');
+  } else if (data.state === 'downloading') {
+    dom.updateStatusMsg.textContent = 'Downloading and preparing update...';
+    dom.btnInstallUpdate.classList.add('hidden');
+    dom.btnRestartApp.classList.add('hidden');
+    dom.updateProgressContainer.classList.remove('hidden');
+    dom.updateProgressFill.style.width = `${data.progress_pct || 0}%`;
+    dom.updateProgressLabel.textContent = `Downloading: ${data.progress_pct || 0}%`;
+  } else if (data.state === 'ready_to_restart') {
+    dom.updateStatusMsg.textContent = 'Update installed successfully! Restart NetScan to apply.';
+    dom.btnInstallUpdate.classList.add('hidden');
+    dom.btnRestartApp.classList.remove('hidden');
+    dom.updateProgressContainer.classList.add('hidden');
+  } else if (data.state === 'available') {
+    dom.updateStatusMsg.textContent = 'A new release is available.';
+    dom.btnInstallUpdate.classList.remove('hidden');
+    dom.btnRestartApp.classList.add('hidden');
+    dom.updateProgressContainer.classList.add('hidden');
+  } else if (data.state === 'up_to_date') {
+    dom.updateStatusMsg.textContent = 'NetScan is up to date.';
+    dom.btnInstallUpdate.classList.add('hidden');
+    dom.btnRestartApp.classList.add('hidden');
+    dom.updateProgressContainer.classList.add('hidden');
+  } else if (data.state === 'error') {
+    dom.updateStatusMsg.textContent = `Update check failed: ${data.error || 'Unknown error'}`;
+    dom.btnInstallUpdate.classList.add('hidden');
+    dom.btnRestartApp.classList.add('hidden');
+    dom.updateProgressContainer.classList.add('hidden');
+  }
+}
+
+async function triggerUpdateCheck() {
+  dom.updateStatusMsg.textContent = 'Checking for updates...';
+  dom.btnCheckUpdates.disabled = true;
+  dom.btnCheckUpdates.textContent = 'Checking...';
+
+  try {
+    const res = await fetch('/api/update/check', {
+      method: 'POST',
+      headers: {
+        'X-NetScan-Token': csrfToken,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+    });
+    const data = await res.json();
+    renderUpdateUI(data);
+  } catch (err) {
+    dom.updateStatusMsg.textContent = 'Error connecting to server';
+    dom.btnCheckUpdates.disabled = false;
+    dom.btnCheckUpdates.textContent = 'Check Now';
+  }
+}
+
+async function triggerUpdateInstall() {
+  dom.btnInstallUpdate.classList.add('hidden');
+  dom.updateProgressContainer.classList.remove('hidden');
+  dom.updateProgressFill.style.width = '0%';
+  dom.updateProgressLabel.textContent = 'Downloading: 0%';
+  dom.updateStatusMsg.textContent = 'Downloading release...';
+
+  try {
+    await fetch('/api/update/apply', {
+      method: 'POST',
+      headers: {
+        'X-NetScan-Token': csrfToken,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+    });
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/update/status');
+        const data = await res.json();
+        renderUpdateUI(data);
+        if (data.state === 'ready_to_restart' || data.state === 'error') {
+          clearInterval(pollInterval);
+        }
+      } catch (_) {
+        clearInterval(pollInterval);
+      }
+    }, 400);
+  } catch (err) {
+    dom.updateStatusMsg.textContent = 'Failed to trigger installation';
+  }
+}
+
+async function triggerUpdateRestart() {
+  dom.btnRestartApp.disabled = true;
+  dom.updateStatusMsg.textContent = 'Restarting NetScan...';
+
+  try {
+    await fetch('/api/update/restart', {
+      method: 'POST',
+      headers: {
+        'X-NetScan-Token': csrfToken,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+    });
+
+    let attempts = 0;
+    const checkInterval = setInterval(async () => {
+      attempts++;
+      if (attempts > 30) {
+        clearInterval(checkInterval);
+        window.location.reload();
+        return;
+      }
+      try {
+        const ping = await fetch('/healthz');
+        if (ping.ok) {
+          clearInterval(checkInterval);
+          window.location.reload();
+        }
+      } catch (_) {}
+    }, 1000);
+  } catch (_) {
+    dom.updateStatusMsg.textContent = 'Error initiating restart';
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

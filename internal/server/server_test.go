@@ -18,6 +18,7 @@ import (
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/server"
 	"github.com/aaronburt/netscan/internal/store"
+	"github.com/aaronburt/netscan/internal/updater"
 )
 
 func setupTestServer(t *testing.T) (*server.Server, string) {
@@ -163,5 +164,54 @@ func TestServerSSEStream(t *testing.T) {
 	}
 	if !strings.Contains(res.Header.Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("expected text/event-stream, got %s", res.Header.Get("Content-Type"))
+	}
+}
+
+func TestServerUpdateEndpoints(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	resIndex, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("failed to get index: %v", err)
+	}
+	defer resIndex.Body.Close()
+	bodyBytes, _ := io.ReadAll(resIndex.Body)
+	bodyStr := string(bodyBytes)
+
+	tokenPrefix := `<meta name="csrf-token" content="`
+	idx := strings.Index(bodyStr, tokenPrefix)
+	if idx == -1 {
+		t.Fatalf("missing csrf token in index html")
+	}
+	tokenStart := idx + len(tokenPrefix)
+	tokenEnd := strings.Index(bodyStr[tokenStart:], `"`)
+	if tokenEnd == -1 {
+		t.Fatalf("malformed csrf meta tag")
+	}
+	token := bodyStr[tokenStart : tokenStart+tokenEnd]
+
+	resStatus, err := http.Get(baseURL + "/api/update/status")
+	if err != nil {
+		t.Fatalf("failed to get update status: %v", err)
+	}
+	defer resStatus.Body.Close()
+	if resStatus.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resStatus.StatusCode)
+	}
+
+	mgr := updater.NewManager("test-repo", "0.1.0", nil)
+	srv.SetUpdaterManager(mgr)
+
+	reqCheck, _ := http.NewRequest(http.MethodPost, baseURL+"/api/update/check", nil)
+	reqCheck.Header.Set("X-NetScan-Token", token)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resCheck, err := client.Do(reqCheck)
+	if err != nil {
+		t.Fatalf("failed to post update check: %v", err)
+	}
+	defer resCheck.Body.Close()
+	if resCheck.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resCheck.StatusCode)
 	}
 }

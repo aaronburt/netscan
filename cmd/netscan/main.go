@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/aaronburt/netscan/internal/server"
 	"github.com/aaronburt/netscan/internal/store"
 	"github.com/aaronburt/netscan/internal/tray"
+	"github.com/aaronburt/netscan/internal/updater"
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
@@ -31,9 +33,90 @@ func init() {
 }
 
 func main() {
+	checkUpdateFlag := flag.Bool("check-update", false, "check github for latest release")
+	updateFlag := flag.Bool("update", false, "download and install latest release if available")
 	headlessFlag := flag.Bool("headless", false, "run without system tray in console mode")
 	configFlag := flag.String("config", "", "path to custom configuration file")
 	flag.Parse()
+
+	if *checkUpdateFlag {
+		winapi.AttachConsoleToParent()
+		cfg, _ := config.LoadConfig(*configFlag)
+		repo := cfg.Update.Repo
+		if repo == "" {
+			repo = "aaronburt/netscan"
+		}
+		fmt.Printf("Checking for updates from %s...\n", repo)
+		res, err := updater.CheckForUpdate(context.Background(), nil, repo, version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Update check failed: %v\n", err)
+			os.Exit(1)
+		}
+		if res.UpdateAvailable && res.Release != nil {
+			fmt.Printf("Update available: %s -> %s\n", version, res.Release.Version)
+			if res.Release.Name != "" {
+				fmt.Printf("Release: %s\n", res.Release.Name)
+			}
+			if res.Release.HTMLURL != "" {
+				fmt.Printf("URL: %s\n", res.Release.HTMLURL)
+			}
+		} else {
+			fmt.Printf("NetScan is up to date (%s).\n", version)
+		}
+		os.Exit(0)
+	}
+
+	if *updateFlag {
+		winapi.AttachConsoleToParent()
+		cfg, _ := config.LoadConfig(*configFlag)
+		repo := cfg.Update.Repo
+		if repo == "" {
+			repo = "aaronburt/netscan"
+		}
+		fmt.Printf("Checking for updates from %s...\n", repo)
+		res, err := updater.CheckForUpdate(context.Background(), nil, repo, version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Update check failed: %v\n", err)
+			os.Exit(1)
+		}
+		if !res.UpdateAvailable || res.Release == nil || res.Release.AssetURL == "" {
+			fmt.Printf("NetScan is already up to date (%s).\n", version)
+			os.Exit(0)
+		}
+		fmt.Printf("Downloading %s (%s)...\n", res.Release.Version, res.Release.AssetName)
+		exePath, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to resolve executable path: %v\n", err)
+			os.Exit(1)
+		}
+		exePath, _ = filepath.EvalSymlinks(exePath)
+		targetDir := filepath.Dir(exePath)
+		tmpPath, err := updater.DownloadAndExtract(context.Background(), nil, res.Release.AssetURL, targetDir, res.Release.ExpectedHash, func(down, tot int64) {
+			if tot > 0 {
+				pct := float64(down) / float64(tot) * 100
+				fmt.Printf("\rProgress: %.1f%% (%d / %d bytes)", pct, down, tot)
+			}
+		})
+		fmt.Println()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := updater.ValidateExecutable(tmpPath); err != nil {
+			_ = os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "Validation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := updater.ReplaceCurrentBinary(tmpPath); err != nil {
+			_ = os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "Failed to replace executable: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully updated to %s!\nPlease restart NetScan to run the new version.\n", res.Release.Version)
+		os.Exit(0)
+	}
+
+	updater.CleanupOldBinary()
 
 	if *headlessFlag {
 		winapi.AttachConsoleToParent()
@@ -132,6 +215,19 @@ func main() {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	supervisor := app.NewSupervisor(logger)
 
+	updaterMgr := updater.NewManager(cfg.Update.Repo, version, func() {
+		logger.Info("restarting for update")
+		rootCancel()
+		supervisor.Stop(3 * time.Second)
+		storeWriter.FlushSync()
+		_ = srv.Stop()
+		_ = mutexHandle.Close()
+	})
+	srv.SetUpdaterManager(updaterMgr)
+	if cfg.Update.CheckOnStartup {
+		updaterMgr.StartBackgroundChecker(rootCtx, time.Duration(cfg.Update.AutoCheckHours)*time.Hour)
+	}
+
 	supervisor.Run("store_writer", func(ctx context.Context) error {
 		return storeWriter.Run(ctx)
 	})
@@ -219,6 +315,7 @@ func main() {
 	trayMgr := tray.NewTrayManager(
 		srv.Port(),
 		h,
+		updaterMgr,
 		func() {
 			logger.Info("tray requested exit")
 			rootCancel()

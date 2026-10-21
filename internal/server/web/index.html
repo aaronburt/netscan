@@ -22,6 +22,10 @@
         <span class="gw-label" id="gw-label">Gateway: ...</span>
       </div>
       <div class="header-actions">
+        <button id="btn-update-menu" class="btn btn-secondary update-btn">
+          <span class="update-badge-dot hidden" id="update-dot"></span>
+          <span id="btn-update-text">Updates</span>
+        </button>
         <button id="btn-pause" class="btn btn-secondary">Pause</button>
         <button id="btn-export-menu" class="btn btn-primary">Export</button>
       </div>
@@ -189,6 +193,49 @@
             <p>1-minute aggregated RTT, min, p50, p95, max, and jitter metrics for time-series analysis.</p>
             <a href="/api/export/rollups.json" target="_blank" class="btn btn-secondary">Download JSON</a>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="update-modal" class="modal hidden">
+    <div class="modal-backdrop" id="update-backdrop"></div>
+    <div class="modal-content update-modal-content">
+      <div class="modal-header">
+        <h3>NetScan Updates</h3>
+        <button id="btn-close-update" class="btn-close" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="update-version-card">
+          <div class="update-version-row">
+            <span>Installed Version:</span>
+            <strong id="update-current-version">--</strong>
+          </div>
+          <div class="update-version-row">
+            <span>Latest Version:</span>
+            <strong id="update-latest-version">--</strong>
+          </div>
+          <div class="update-status-msg" id="update-status-msg">
+            Checking for updates...
+          </div>
+        </div>
+
+        <div id="update-release-notes-section" class="update-notes-section hidden">
+          <h4>Release Notes</h4>
+          <div class="update-notes-body" id="update-notes-body"></div>
+        </div>
+
+        <div id="update-progress-container" class="update-progress-box hidden">
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="update-progress-fill"></div>
+          </div>
+          <div class="progress-label" id="update-progress-label">Downloading: 0%</div>
+        </div>
+
+        <div class="update-actions">
+          <button id="btn-check-updates" class="btn btn-secondary">Check Now</button>
+          <button id="btn-install-update" class="btn btn-primary hidden">Download &amp; Install</button>
+          <button id="btn-restart-app" class="btn btn-primary hidden">Restart NetScan</button>
         </div>
       </div>
     </div>
