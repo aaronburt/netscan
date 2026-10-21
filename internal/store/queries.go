@@ -525,3 +525,10 @@ func (r *StoreReader) QueryStats(now time.Time) (StatsSummary, error) {
 
 	return stats, nil
 }
+
+// MaxEventID returns the highest event id stored, or 0 when there are none.
+func (r *StoreReader) MaxEventID() (int64, error) {
+	var id int64
+	err := r.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events;`).Scan(&id)
+	return id, err
+}

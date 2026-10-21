@@ -78,6 +78,16 @@ func (d *Detector) SetNetworkContext(networkID int64, isVPN bool, gwIP, ispHop, 
 	d.ssid = ssid
 }
 
+// SetNextEventID makes new events continue numbering after the ones already
+// stored, so a restart doesn't overwrite earlier events that share an id.
+func (d *Detector) SetNextEventID(next int64) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if next > d.nextEventID {
+		d.nextEventID = next
+	}
+}
+
 func (d *Detector) Reset() {
 	d.lock.Lock()
 	defer d.lock.Unlock()

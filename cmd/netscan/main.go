@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -139,9 +140,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "netscan: failed to open database: %v\n", err)
 			os.Exit(1)
 		}
-		defer db.Close()
 		writer := store.NewStoreWriter(db, cfg)
-		if err := writer.ResetHistory(); err != nil {
+		err = writer.ResetHistory()
+		_ = db.Close()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "netscan: failed to reset timeline history: %v\n", err)
 			os.Exit(1)
 		}
@@ -176,10 +178,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	defer mutexHandle.Close()
 
 	logger, logCloser := app.SetupLogger(*headlessFlag)
-	defer logCloser.Close()
 
 	logger.Info("starting netscan", "version", version, "headless", *headlessFlag)
 
@@ -199,13 +199,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	defer db.Close()
 
 	if err := store.QuickCheck(db); err != nil {
 		logger.Error("quick check failed, quarantining corrupt database", "error", err)
 		_ = db.Close()
 		_ = store.QuarantineCorruptDB(dbPath)
-		db, _ = store.OpenDB(dbPath)
+		db, err = store.OpenDB(dbPath)
+		if err != nil {
+			logger.Error("failed to open fresh database", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	if err := store.InitSchema(db); err != nil {
@@ -232,6 +235,11 @@ func main() {
 			sched.SetFastMode(fast)
 		}
 	})
+	if maxID, err := storeReader.MaxEventID(); err != nil {
+		logger.Warn("could not read last event id", "error", err)
+	} else {
+		det.SetNextEventID(maxID + 1)
+	}
 
 	probeOutCh := make(chan probe.ProbeResult, 1024)
 	sched = scheduler.NewScheduler(cfg, registry, probeOutCh, version, func(gap time.Duration) {
@@ -257,24 +265,33 @@ func main() {
 		logger.Error("failed to start server", "error", err)
 		os.Exit(1)
 	}
-	defer srv.Stop()
-	defer os.Remove(config.PortPath())
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	supervisor := app.NewSupervisor(logger)
 
+	// shutdown is the single way out once everything is running. The store
+	// writer flushes its queue when its context is cancelled, so stopping the
+	// supervisor is enough to get pending data onto disk.
 	var shuttingDown atomic.Bool
-	updaterMgr := updater.NewManager(cfg.Update.Repo, version, func() {
+	var shutdownOnce sync.Once
+	shutdown := func(reason string) {
 		shuttingDown.Store(true)
-		logger.Info("restarting for update")
-		rootCancel()
-		supervisor.Stop(3 * time.Second)
-		storeWriter.FlushSync()
-		_ = db.Close()
-		_ = srv.Stop()
-		_ = os.Remove(config.PortPath())
-		_ = logCloser.Close()
-		_ = mutexHandle.Close()
+		shutdownOnce.Do(func() {
+			logger.Info("shutting down netscan", "reason", reason)
+			rootCancel()
+			if !supervisor.Stop(5 * time.Second) {
+				logger.Warn("components did not stop in time")
+			}
+			_ = srv.Stop()
+			_ = db.Close()
+			_ = os.Remove(config.PortPath())
+			_ = logCloser.Close()
+			_ = mutexHandle.Close()
+		})
+	}
+
+	updaterMgr := updater.NewManager(cfg.Update.Repo, version, func() {
+		shutdown("restarting for update")
 	})
 	srv.SetUpdaterManager(updaterMgr)
 	if cfg.Update.CheckOnStartup {
@@ -358,10 +375,7 @@ func main() {
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 		<-sigCh
 
-		logger.Info("shutting down netscan")
-		rootCancel()
-		supervisor.Stop(5 * time.Second)
-		storeWriter.FlushSync()
+		shutdown("signal")
 		return
 	}
 
@@ -370,18 +384,10 @@ func main() {
 		h,
 		updaterMgr,
 		func() {
-			if shuttingDown.Swap(true) {
-				return
+			if shuttingDown.Load() {
+				return // an update restart is already in progress
 			}
-			logger.Info("tray requested exit")
-			rootCancel()
-			supervisor.Stop(5 * time.Second)
-			storeWriter.FlushSync()
-			_ = db.Close()
-			_ = srv.Stop()
-			_ = os.Remove(config.PortPath())
-			_ = logCloser.Close()
-			_ = mutexHandle.Close()
+			shutdown("tray exit")
 			os.Exit(0)
 		},
 		func() bool {
@@ -410,13 +416,6 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 		<-sigCh
-		rootCancel()
-		supervisor.Stop(5 * time.Second)
-		storeWriter.FlushSync()
-		_ = db.Close()
-		_ = srv.Stop()
-		_ = os.Remove(config.PortPath())
-		_ = logCloser.Close()
-		_ = mutexHandle.Close()
+		shutdown("signal")
 	}
 }

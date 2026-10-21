@@ -231,3 +231,48 @@ func TestStoreResetHistory(t *testing.T) {
 		t.Fatalf("expected 0 events after reset, got %d", len(eventsAfter))
 	}
 }
+
+// FlushSync used to block forever when called after Run had returned,
+// which hung every shutdown path.
+func TestFlushSyncAfterStopReturns(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if err := store.InitSchema(db); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	writer := store.NewStoreWriter(db, config.DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		_ = writer.Run(ctx)
+		close(runDone)
+	}()
+
+	end := int64(2000)
+	writer.QueueEvent(detector.Event{ID: 7, Kind: detector.EventKindOutage, Classification: detector.ClassWAN, StartMS: 1000, EndMS: &end})
+	cancel()
+	<-runDone
+
+	flushed := make(chan struct{})
+	go func() {
+		writer.FlushSync()
+		close(flushed)
+	}()
+	select {
+	case <-flushed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("FlushSync blocked after Run stopped")
+	}
+
+	maxID, err := store.NewStoreReader(db).MaxEventID()
+	if err != nil {
+		t.Fatalf("MaxEventID: %v", err)
+	}
+	if maxID != 7 {
+		t.Fatalf("MaxEventID = %d, want 7", maxID)
+	}
+}

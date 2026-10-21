@@ -74,6 +74,8 @@ type StoreWriter struct {
 	cfg             config.Config
 	inCh            chan writeItem
 	flushReqCh      chan chan struct{}
+	stopped         chan struct{}
+	stopOnce        sync.Once
 	droppedSamples  atomic.Int64
 	lastDropLogTime time.Time
 	knownPartitions map[string]bool
@@ -88,18 +90,25 @@ func NewStoreWriter(db *sql.DB, cfg config.Config) *StoreWriter {
 		cfg:             cfg,
 		inCh:            make(chan writeItem, 8192),
 		flushReqCh:      make(chan chan struct{}, 1),
+		stopped:         make(chan struct{}),
 		knownPartitions: make(map[string]bool),
 		rollups:         make(map[rollupBucketKey]*rollupAccumulator),
 		compactor:       NewCompactor(cfg),
 	}
 }
 
+// FlushSync blocks until everything queued so far is written. It returns
+// straight away once Run has stopped, because Run flushes on its way out.
 func (w *StoreWriter) FlushSync() {
 	done := make(chan struct{})
 	select {
 	case w.flushReqCh <- done:
-		<-done
-	default:
+	case <-w.stopped:
+		return
+	}
+	select {
+	case <-done:
+	case <-w.stopped:
 	}
 }
 
@@ -242,6 +251,7 @@ func (w *StoreWriter) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			w.drainAndFlush(batch)
+			w.stopOnce.Do(func() { close(w.stopped) })
 			return nil
 
 		case item := <-w.inCh:
