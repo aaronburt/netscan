@@ -8,135 +8,185 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-left">
-      <div class="logo-mark">
-        <span class="status-dot healthy" id="global-dot"></span>
-        <h1>NetScan</h1>
+  <div class="app-layout">
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <span class="status-indicator healthy" id="global-dot"></span>
+          <h1>NetScan</h1>
+        </div>
+        <div class="status-pill healthy" id="global-pill">HEALTHY</div>
       </div>
-      <div class="status-pill healthy" id="global-pill">HEALTHY</div>
-    </div>
-    <div class="header-right">
-      <div class="net-info" id="net-info">
-        <span class="net-label" id="net-label">LAN / Wi-Fi</span>
-        <span class="gw-label" id="gw-label">Gateway: ...</span>
-      </div>
-      <div class="header-actions">
-        <button id="btn-update-menu" class="btn btn-secondary update-btn">
-          <span class="update-badge-dot hidden" id="update-dot"></span>
-          <span id="btn-update-text">Updates</span>
-        </button>
-        <button id="btn-pause" class="btn btn-secondary">Pause</button>
-        <button id="btn-export-menu" class="btn btn-primary">Export</button>
-      </div>
-    </div>
-  </header>
 
-  <main class="dashboard-container">
-    <section class="strip-section">
-      <div class="strip-header">
-        <h2>Live Monitor (60s Rolling Window)</h2>
-        <div class="strip-metrics">
-          <div class="metric-card" id="card-gw">
-            <span class="metric-title">Gateway</span>
+      <div class="header-controls">
+        <div class="net-chip" id="net-info">
+          <div class="net-chip-main" id="net-label">Ethernet / Wi-Fi</div>
+          <div class="net-chip-sub" id="gw-label">Gateway: ...</div>
+        </div>
+
+        <div class="btn-group">
+          <button id="btn-update-menu" class="btn btn-subtle update-btn">
+            <span class="update-badge-dot hidden" id="update-dot"></span>
+            <span id="btn-update-text">Updates</span>
+          </button>
+          <button id="btn-pause" class="btn btn-secondary">Pause</button>
+          <button id="btn-export-menu" class="btn btn-primary">Export</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="metrics-grid">
+        <div class="metric-card" id="card-gw">
+          <div class="metric-top">
+            <span class="metric-badge badge-gw">Gateway</span>
+            <span class="metric-sub">Local LAN</span>
+          </div>
+          <div class="metric-body">
             <span class="metric-val" id="val-gw">-- ms</span>
           </div>
-          <div class="metric-card" id="card-wan-icmp">
-            <span class="metric-title">WAN ICMP</span>
+        </div>
+
+        <div class="metric-card" id="card-wan-icmp">
+          <div class="metric-top">
+            <span class="metric-badge badge-wan">WAN ICMP</span>
+            <span class="metric-sub">1.1.1.1 / 8.8.8.8</span>
+          </div>
+          <div class="metric-body">
             <span class="metric-val" id="val-wan-icmp">-- ms</span>
           </div>
-          <div class="metric-card" id="card-wan-tcp">
-            <span class="metric-title">WAN TCP</span>
+        </div>
+
+        <div class="metric-card" id="card-wan-tcp">
+          <div class="metric-top">
+            <span class="metric-badge badge-tcp">WAN TCP</span>
+            <span class="metric-sub">Port 443 Handshake</span>
+          </div>
+          <div class="metric-body">
             <span class="metric-val" id="val-wan-tcp">-- ms</span>
           </div>
-          <div class="metric-card" id="card-dns">
-            <span class="metric-title">DNS</span>
+        </div>
+
+        <div class="metric-card" id="card-dns">
+          <div class="metric-top">
+            <span class="metric-badge badge-dns">DNS Port 53</span>
+            <span class="metric-sub">Upstream Resolvers</span>
+          </div>
+          <div class="metric-body">
             <span class="metric-val" id="val-dns">-- ms</span>
           </div>
-          <div class="metric-card" id="card-http">
-            <span class="metric-title">HTTP 204</span>
+        </div>
+
+        <div class="metric-card" id="card-http">
+          <div class="metric-top">
+            <span class="metric-badge badge-http">HTTP 204</span>
+            <span class="metric-sub">End-to-End Check</span>
+          </div>
+          <div class="metric-body">
             <span class="metric-val" id="val-http">-- ms</span>
           </div>
         </div>
-      </div>
-      <div class="canvas-wrapper">
-        <canvas id="live-canvas"></canvas>
-      </div>
-    </section>
+      </section>
 
-    <section class="timeline-section">
-      <div class="section-toolbar">
-        <h2>7-Day Stability Timeline</h2>
-        <div class="time-range-picker">
-          <button class="time-btn" data-hours="1">1h</button>
-          <button class="time-btn" data-hours="6">6h</button>
-          <button class="time-btn active" data-hours="24">24h</button>
-          <button class="time-btn" data-hours="168">7d</button>
+      <section class="panel-section">
+        <div class="panel-header">
+          <div class="panel-title-group">
+            <h2>Live Oscilloscope</h2>
+            <span class="panel-pill">60s Rolling Window</span>
+          </div>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-dot dot-gw"></span>Gateway</span>
+            <span class="legend-item"><span class="legend-dot dot-wan"></span>WAN ICMP</span>
+            <span class="legend-item"><span class="legend-dot dot-tcp"></span>WAN TCP</span>
+            <span class="legend-item"><span class="legend-dot dot-dns"></span>DNS</span>
+          </div>
         </div>
-      </div>
-      <div class="canvas-wrapper timeline-canvas-wrapper">
-        <canvas id="timeline-canvas"></canvas>
-      </div>
-    </section>
+        <div class="canvas-wrapper">
+          <canvas id="live-canvas"></canvas>
+        </div>
+      </section>
 
-    <section class="events-section">
-      <div class="section-toolbar">
-        <div class="toolbar-left">
-          <h2>Outage & Latency Events</h2>
-          <span class="badge" id="event-count-badge">0 events</span>
+      <section class="panel-section">
+        <div class="panel-header">
+          <div class="panel-title-group">
+            <h2>Connection Stability History</h2>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-dot dot-ok"></span>Normal RTT</span>
+              <span class="legend-item"><span class="legend-dot dot-deg"></span>Elevated</span>
+              <span class="legend-item"><span class="legend-dot dot-out"></span>Outage / Loss</span>
+            </div>
+          </div>
+          <div class="time-range-picker">
+            <button class="time-btn" data-hours="1">1h</button>
+            <button class="time-btn" data-hours="6">6h</button>
+            <button class="time-btn active" data-hours="24">24h</button>
+            <button class="time-btn" data-hours="168">7d</button>
+          </div>
         </div>
-        <div class="toolbar-filters">
-          <label class="filter-label">
-            Filter:
-            <select id="filter-kind" class="select-input">
-              <option value="">All Kinds</option>
-              <option value="outage">Outages Only</option>
-              <option value="blip">Blips (&lt;2s)</option>
-              <option value="latency">Latency Spikes</option>
-            </select>
-          </label>
-          <label class="filter-label">
-            Class:
-            <select id="filter-class" class="select-input">
-              <option value="">All Layers</option>
-              <option value="WAN">WAN (ISP)</option>
-              <option value="GATEWAY">Gateway (Local)</option>
-              <option value="DNS_ALL">DNS Outage</option>
-              <option value="HTTP">HTTP App Outage</option>
-            </select>
-          </label>
+        <div class="canvas-wrapper timeline-canvas-wrapper">
+          <canvas id="timeline-canvas"></canvas>
         </div>
-      </div>
+      </section>
 
-      <div tabindex="0" role="region" aria-labelledby="events-table-caption" class="table-wrapper">
-        <table id="events-table">
-          <caption id="events-table-caption" class="sr-only">Connection Outages and Stability Events</caption>
-          <thead>
-            <tr>
-              <th scope="col">Time</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Classification</th>
-              <th scope="col">Duration</th>
-              <th scope="col">Gateway Health</th>
-              <th scope="col">Uncertainty</th>
-              <th scope="col">Action</th>
-            </tr>
-          </thead>
-          <tbody id="events-tbody">
-            <tr>
-              <td colspan="7" class="empty-state">No events recorded in this time window.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </main>
+      <section class="panel-section">
+        <div class="panel-header">
+          <div class="panel-title-group">
+            <h2>Outages &amp; Latency Events</h2>
+            <span class="badge" id="event-count-badge">0 events</span>
+          </div>
+          <div class="toolbar-filters">
+            <label class="filter-label">
+              Filter:
+              <select id="filter-kind" class="select-input">
+                <option value="">All Kinds</option>
+                <option value="outage">Outages Only</option>
+                <option value="blip">Blips (&lt;2s)</option>
+                <option value="latency">Latency Spikes</option>
+              </select>
+            </label>
+            <label class="filter-label">
+              Layer:
+              <select id="filter-class" class="select-input">
+                <option value="">All Layers</option>
+                <option value="WAN">WAN (ISP)</option>
+                <option value="GATEWAY">Gateway (Local)</option>
+                <option value="DNS_ALL">DNS Outage</option>
+                <option value="HTTP">HTTP App Outage</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div tabindex="0" role="region" aria-labelledby="events-table-caption" class="table-wrapper">
+          <table id="events-table">
+            <caption id="events-table-caption" class="sr-only">Connection Outages and Stability Events</caption>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Classification</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Gateway Health</th>
+                <th scope="col">Uncertainty</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="events-tbody">
+              <tr>
+                <td colspan="7" class="empty-state">No events recorded in this time window.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div id="drilldown-modal" class="modal hidden">
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="modal-content">
       <div class="modal-header">
-        <h3 id="drilldown-title">Event Investigation & Probe Drill-Down</h3>
+        <h3 id="drilldown-title">Event Investigation &amp; Probe Drill-Down</h3>
         <button id="btn-close-modal" class="btn-close" aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">
@@ -167,7 +217,7 @@
     <div class="modal-backdrop" id="export-backdrop"></div>
     <div class="modal-content export-modal-content">
       <div class="modal-header">
-        <h3>Export Telemetry & Reports</h3>
+        <h3>Export Telemetry &amp; Reports</h3>
         <button id="btn-close-export" class="btn-close" aria-label="Close dialog">&times;</button>
       </div>
       <div class="modal-body">

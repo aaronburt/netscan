@@ -114,8 +114,8 @@ function setupEventListeners() {
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
+  canvas.width = Math.floor(rect.width * dpr);
+  canvas.height = Math.floor(rect.height * dpr);
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 }
@@ -145,14 +145,14 @@ async function fetchInitialData() {
     const res = await fetch('/api/status');
     const data = await res.json();
     if (data.network) {
-      dom.netLabel.textContent = data.network.ssid ? `Wi-Fi (${data.network.ssid})` : (data.network.vpn ? 'VPN Active' : 'Ethernet / LAN');
+      dom.netLabel.textContent = data.network.ssid ? `Wi-Fi (${data.network.ssid})` : (data.network.is_vpn ? 'VPN Active' : (data.network.interface || 'Ethernet / LAN'));
       dom.gwLabel.textContent = `Gateway: ${data.network.gateway_ip || 'N/A'}`;
     }
   } catch (_) {}
 }
 
 function updateSnapshot(snap) {
-  dom.globalDot.className = `status-dot ${snap.state_string.toLowerCase()}`;
+  dom.globalDot.className = `status-indicator ${snap.state_string.toLowerCase()}`;
   dom.globalPill.className = `status-pill ${snap.state_string.toLowerCase()}`;
   dom.globalPill.textContent = snap.state_string;
 
@@ -187,26 +187,61 @@ function drawLiveChart() {
 
   ctx.clearRect(0, 0, w, h);
 
-  if (state.liveSamples.length < 2) return;
+  const paddingLeft = 12;
+  const paddingRight = 48;
+  const paddingTop = 12;
+  const paddingBottom = 22;
+  const plotWidth = w - paddingLeft - paddingRight;
+  const plotHeight = h - paddingTop - paddingBottom;
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px "SF Mono", Menlo, Consolas, monospace';
+  ctx.textAlign = 'right';
+
+  const maxRTT = 100;
+  const ySteps = [0, 25, 50, 75, 100];
+  for (const step of ySteps) {
+    const y = paddingTop + plotHeight - (step / maxRTT) * plotHeight;
+    ctx.beginPath();
+    ctx.setLineDash([4, 4]);
+    ctx.moveTo(paddingLeft, y);
+    ctx.lineTo(w - paddingRight, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText(`${step}ms`, w - 10, y + 3);
+  }
+
+  const timeTicks = [
+    { label: '-60s', frac: 0.0 },
+    { label: '-45s', frac: 0.25 },
+    { label: '-30s', frac: 0.5 },
+    { label: '-15s', frac: 0.75 },
+    { label: 'Now', frac: 1.0 },
+  ];
+  ctx.textAlign = 'center';
+  for (const t of timeTicks) {
+    const x = paddingLeft + t.frac * plotWidth;
+    ctx.fillText(t.label, x, h - 6);
+  }
+
+  if (state.liveSamples.length < 2) {
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Awaiting real-time probe telemetry...', w / 2, h / 2);
+    return;
+  }
 
   const now = state.liveSamples[state.liveSamples.length - 1].ts;
   const startTime = now - (state.maxLiveSeconds * 1000);
 
-  ctx.strokeStyle = '#334155';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = 1; i <= 3; i++) {
-    const y = h - (h / 4) * i;
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-  }
-  ctx.stroke();
-
-  const maxRTT = 100;
-
   function plotLine(key, color) {
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     let started = false;
 
@@ -216,8 +251,9 @@ function drawLiveChart() {
         started = false;
         continue;
       }
-      const x = ((s.ts - startTime) / (state.maxLiveSeconds * 1000)) * w;
-      const y = h - (Math.min(val, maxRTT) / maxRTT) * (h - 20) - 10;
+      const x = paddingLeft + ((s.ts - startTime) / (state.maxLiveSeconds * 1000)) * plotWidth;
+      const y = paddingTop + plotHeight - (Math.min(val, maxRTT) / maxRTT) * plotHeight;
+
       if (!started) {
         ctx.moveTo(x, y);
         started = true;
@@ -231,7 +267,7 @@ function drawLiveChart() {
   plotLine('gw', '#10b981');
   plotLine('wan', '#38bdf8');
   plotLine('tcp', '#f59e0b');
-  plotLine('dns', '#c084fc');
+  plotLine('dns', '#a855f7');
 }
 
 async function fetchTimelineRollups() {
@@ -254,9 +290,53 @@ function drawTimelineChart() {
 
   ctx.clearRect(0, 0, w, h);
 
+  const paddingLeft = 12;
+  const paddingRight = 48;
+  const paddingTop = 12;
+  const paddingBottom = 22;
+  const plotWidth = w - paddingLeft - paddingRight;
+  const plotHeight = h - paddingTop - paddingBottom;
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px "SF Mono", Menlo, Consolas, monospace';
+  ctx.textAlign = 'right';
+
+  const maxRTT = 100;
+  const ySteps = [0, 50, 100];
+  for (const step of ySteps) {
+    const y = paddingTop + plotHeight - (step / maxRTT) * plotHeight;
+    ctx.beginPath();
+    ctx.setLineDash([4, 4]);
+    ctx.moveTo(paddingLeft, y);
+    ctx.lineTo(w - paddingRight, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText(`${step}ms`, w - 10, y + 3);
+  }
+
+  const rangeHours = state.timelineRangeHours;
+  let ticks = [];
+  if (rangeHours === 1) {
+    ticks = ['-60m', '-45m', '-30m', '-15m', 'Now'];
+  } else if (rangeHours === 6) {
+    ticks = ['-6h', '-4.5h', '-3h', '-1.5h', 'Now'];
+  } else if (rangeHours === 24) {
+    ticks = ['-24h', '-18h', '-12h', '-6h', 'Now'];
+  } else {
+    ticks = ['-7d', '-5d', '-3d', '-1d', 'Now'];
+  }
+
+  ctx.textAlign = 'center';
+  for (let i = 0; i < ticks.length; i++) {
+    const x = paddingLeft + (i / (ticks.length - 1)) * plotWidth;
+    ctx.fillText(ticks[i], x, h - 6);
+  }
+
   if (state.timelineRollups.length === 0) {
     ctx.fillStyle = '#64748b';
-    ctx.font = '12px system-ui';
+    ctx.font = '12px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('Accumulating 1-minute historical rollups...', w / 2, h / 2);
     return;
@@ -265,21 +345,23 @@ function drawTimelineChart() {
   const now = Date.now();
   const fromMS = now - (state.timelineRangeHours * 3600 * 1000);
   const span = now - fromMS;
-
-  const barWidth = Math.max(2, w / (state.timelineRollups.length || 1));
+  const barWidth = Math.max(2, (plotWidth / state.timelineRollups.length) - 1);
 
   for (const r of state.timelineRollups) {
-    const x = ((r.bucket_ms - fromMS) / span) * w;
+    const x = paddingLeft + ((r.bucket_ms - fromMS) / span) * plotWidth;
     const loss = r.loss_pct || 0;
     const rtt = (r.p50_us || 0) / 1000;
 
-    if (loss > 0) {
-      ctx.fillStyle = loss > 50 ? '#ef4444' : '#f59e0b';
-      ctx.fillRect(x, 0, barWidth, h);
+    if (loss > 50) {
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(x, paddingTop, barWidth, plotHeight);
+    } else if (loss > 0) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(x, paddingTop, barWidth, plotHeight);
     } else {
-      const barH = (Math.min(rtt, 100) / 100) * (h - 20);
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillRect(x, h - barH, barWidth, barH);
+      const barH = (Math.min(rtt, maxRTT) / maxRTT) * plotHeight;
+      ctx.fillStyle = rtt > 50 ? '#f59e0b' : '#38bdf8';
+      ctx.fillRect(x, paddingTop + plotHeight - barH, barWidth, Math.max(2, barH));
     }
   }
 }
@@ -339,14 +421,27 @@ window.inspectEvent = async function(id) {
     const gwStr = `${(detail.event.gateway_ok_pct || 100).toFixed(1)}%`;
 
     dom.drilldownSummary.innerHTML = `
-      <div><strong>Start:</strong> ${new Date(detail.event.start_ms).toLocaleString()} (Uncertainty ±${((detail.event.start_uncert_ms || 1000) / 1000).toFixed(1)}s)</div>
-      <div><strong>Duration:</strong> ${durStr} | <strong>Gateway LAN Reachability:</strong> ${gwStr}</div>
-      <div><strong>Fault Layer:</strong> ${detail.event.classification}</div>
+      <div class="drilldown-stat-box">
+        <span class="drilldown-stat-label">Start Timestamp</span>
+        <span class="drilldown-stat-val">${new Date(detail.event.start_ms).toLocaleTimeString()} (±${((detail.event.start_uncert_ms || 1000) / 1000).toFixed(1)}s)</span>
+      </div>
+      <div class="drilldown-stat-box">
+        <span class="drilldown-stat-label">Duration</span>
+        <span class="drilldown-stat-val">${durStr}</span>
+      </div>
+      <div class="drilldown-stat-box">
+        <span class="drilldown-stat-label">Gateway Reachability</span>
+        <span class="drilldown-stat-val">${gwStr}</span>
+      </div>
+      <div class="drilldown-stat-box">
+        <span class="drilldown-stat-label">Fault Layer</span>
+        <span class="drilldown-stat-val"><code>${detail.event.classification}</code></span>
+      </div>
     `;
 
     dom.drilldownTbody.innerHTML = (detail.samples || []).map(s => {
       const time = new Date(s.ts_ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
-      const statusBadge = s.ok ? '<span style="color:#10b981">OK</span>' : '<span style="color:#ef4444">FAIL</span>';
+      const statusBadge = s.ok ? '<span style="color:#10b981;font-weight:600">OK</span>' : '<span style="color:#ef4444;font-weight:600">FAIL</span>';
       const rtt = s.rtt_us ? `${(s.rtt_us / 1000).toFixed(1)} ms` : '--';
       const phases = s.dns_us ? `DNS: ${(s.dns_us/1000).toFixed(0)}ms | TCP: ${(s.tcp_us/1000).toFixed(0)}ms | TTFB: ${(s.ttfb_us/1000).toFixed(0)}ms` : '--';
       const err = s.err_text || (s.err ? `Code ${s.err}` : '');
