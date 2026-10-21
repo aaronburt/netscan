@@ -22,6 +22,15 @@ cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netsc
 Remove-Item dist\installer-base.exe
 ```
 
+## Development
+
+NetScan only runs on Windows, but the core packages (probes, scheduler, detector, store, server) build and test on any OS. Windows-only code sits behind build tags with small stubs for other platforms.
+
+```sh
+go vet ./...
+go test -race ./...
+```
+
 ## Installation
 
 Run the self-contained installer:

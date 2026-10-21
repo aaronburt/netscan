@@ -27,14 +27,14 @@ type ReleaseAsset struct {
 }
 
 type Release struct {
-	TagName     string         `json:"tag_name"`
-	Name        string         `json:"name"`
-	Body        string         `json:"body"`
-	HTMLURL     string         `json:"html_url"`
-	PublishedAt time.Time      `json:"published_at"`
-	Draft       bool           `json:"draft"`
-	Prerelease  bool           `json:"prerelease"`
-	Assets      []ReleaseAsset `json:"assets"`
+	TagName      string         `json:"tag_name"`
+	Name         string         `json:"name"`
+	Body         string         `json:"body"`
+	HTMLURL      string         `json:"html_url"`
+	PublishedAt  time.Time      `json:"published_at"`
+	Draft        bool           `json:"draft"`
+	Prerelease   bool           `json:"prerelease"`
+	Assets       []ReleaseAsset `json:"assets"`
 	Version      string         `json:"version"`
 	AssetURL     string         `json:"asset_url"`
 	AssetName    string         `json:"asset_name"`
