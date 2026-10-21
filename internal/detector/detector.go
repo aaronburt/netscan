@@ -88,6 +88,14 @@ func (d *Detector) SetNextEventID(next int64) {
 	}
 }
 
+// CloseForShutdown ends any open event as interrupted, so it isn't left
+// without an end time when the app exits. It returns the closed event.
+func (d *Detector) CloseForShutdown() *Event {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	return d.closeOpenEvent(d.clock.Now(), true).Clone()
+}
+
 func (d *Detector) Reset() {
 	d.lock.Lock()
 	defer d.lock.Unlock()

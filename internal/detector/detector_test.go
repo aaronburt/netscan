@@ -326,3 +326,20 @@ func TestSetNextEventID(t *testing.T) {
 		t.Fatalf("event = %+v, want id 42", created)
 	}
 }
+
+func TestCloseForShutdownEndsOpenEvent(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	if d.CloseForShutdown() != nil {
+		t.Fatal("nothing open, expected nil")
+	}
+	sendTick(d, clock, true, true, true)
+	for i := 0; i < 3; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, false, false, true)
+	}
+	evt := d.CloseForShutdown()
+	if evt == nil || evt.EndMS == nil || evt.Flags&detector.EventFlagInterrupted == 0 {
+		t.Fatalf("expected an interrupted, closed event, got %+v", evt)
+	}
+}
