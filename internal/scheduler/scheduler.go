@@ -17,6 +17,7 @@ type Scheduler struct {
 	fastMode   atomic.Bool
 	paused     atomic.Bool
 	seq        atomic.Uint64
+	dropped    atomic.Int64
 	inFlight   map[int]*atomic.Int32
 	flightLock sync.Mutex
 	version    string
@@ -303,5 +304,12 @@ func (s *Scheduler) sendResult(res probe.ProbeResult) {
 	select {
 	case s.outCh <- res:
 	default:
+		s.dropped.Add(1)
 	}
+}
+
+// DroppedResults is how many probe results were thrown away because the
+// processor couldn't keep up.
+func (s *Scheduler) DroppedResults() int64 {
+	return s.dropped.Load()
 }

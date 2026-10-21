@@ -276,3 +276,27 @@ func TestFlushSyncAfterStopReturns(t *testing.T) {
 		t.Fatalf("MaxEventID = %d, want 7", maxID)
 	}
 }
+
+// Write failures used to be thrown away without a trace.
+func TestWriteErrorsAreCounted(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := store.InitSchema(db); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	writer := store.NewStoreWriter(db, config.DefaultConfig())
+	_ = db.Close() // every write from here on fails
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = writer.Run(ctx) }()
+
+	writer.QueueEvent(detector.Event{ID: 1, Kind: detector.EventKindBlip, Classification: detector.ClassWAN})
+	writer.FlushSync()
+
+	if st := writer.Stats(); st.WriteErrors == 0 || st.LastError == "" {
+		t.Fatalf("expected a counted write error, got %+v", st)
+	}
+}

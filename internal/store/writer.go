@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -77,7 +78,10 @@ type StoreWriter struct {
 	stopped         chan struct{}
 	stopOnce        sync.Once
 	droppedSamples  atomic.Int64
-	lastDropLogTime time.Time
+	writeErrors     atomic.Int64
+	errLock         sync.Mutex
+	lastErr         string
+	lastErrLogTime  time.Time
 	knownPartitions map[string]bool
 	lock            sync.Mutex
 	rollups         map[rollupBucketKey]*rollupAccumulator
@@ -94,6 +98,42 @@ func NewStoreWriter(db *sql.DB, cfg config.Config) *StoreWriter {
 		knownPartitions: make(map[string]bool),
 		rollups:         make(map[rollupBucketKey]*rollupAccumulator),
 		compactor:       NewCompactor(cfg),
+	}
+}
+
+// WriterStats reports data the writer failed to store.
+type WriterStats struct {
+	DroppedSamples int64  `json:"dropped_samples"`
+	WriteErrors    int64  `json:"write_errors"`
+	LastError      string `json:"last_error,omitempty"`
+}
+
+func (w *StoreWriter) Stats() WriterStats {
+	w.errLock.Lock()
+	defer w.errLock.Unlock()
+	return WriterStats{
+		DroppedSamples: w.droppedSamples.Load(),
+		WriteErrors:    w.writeErrors.Load(),
+		LastError:      w.lastErr,
+	}
+}
+
+// noteError counts a failed write and logs it, at most once a minute so a
+// broken database can't flood the log.
+func (w *StoreWriter) noteError(op string, err error) {
+	if err == nil {
+		return
+	}
+	total := w.writeErrors.Add(1)
+	w.errLock.Lock()
+	w.lastErr = op + ": " + err.Error()
+	shouldLog := time.Since(w.lastErrLogTime) >= time.Minute
+	if shouldLog {
+		w.lastErrLogTime = time.Now()
+	}
+	w.errLock.Unlock()
+	if shouldLog {
+		slog.Error("store write failed", "op", op, "error", err, "total_errors", total, "dropped_samples", w.droppedSamples.Load())
 	}
 }
 
@@ -309,6 +349,7 @@ func (w *StoreWriter) flush(batch []writeItem) {
 
 	tx, err := w.db.Begin()
 	if err != nil {
+		w.noteError("begin batch", err)
 		return
 	}
 	defer tx.Rollback()
@@ -323,34 +364,41 @@ func (w *StoreWriter) flush(batch []writeItem) {
 	for _, item := range batch {
 		switch item.itemType {
 		case writeItemSample:
-			w.writeSampleTx(tx, item.sample, sampleStmts)
+			w.noteError("write sample", w.writeSampleTx(tx, item.sample, sampleStmts))
 			w.accumulateRollup(item.sample)
 		case writeItemEvent:
-			w.writeEventTx(tx, item.event)
+			w.noteError("write event", w.writeEventTx(tx, item.event))
 		case writeItemSysEvent:
-			w.writeSysEventTx(tx, item.sysEvent)
+			w.noteError("write system event", w.writeSysEventTx(tx, item.sysEvent))
 		case writeItemTarget:
-			w.writeTargetTx(tx, item.target)
+			w.noteError("write target", w.writeTargetTx(tx, item.target))
 		case writeItemNetwork:
-			w.writeNetworkTx(tx, item.network)
+			w.noteError("write network", w.writeNetworkTx(tx, item.network))
 		case writeItemCoverage:
-			w.writeCoverageTx(tx, item.coverage)
+			w.noteError("write coverage", w.writeCoverageTx(tx, item.coverage))
 		}
 	}
 
-	_ = tx.Commit()
+	w.noteError("commit batch", tx.Commit())
 }
 
-func (w *StoreWriter) writeSampleTx(tx *sql.Tx, s probe.ProbeResult, stmts map[string]*sql.Stmt) {
+func (w *StoreWriter) writeSampleTx(tx *sql.Tx, s probe.ProbeResult, stmts map[string]*sql.Stmt) error {
 	t := time.UnixMilli(s.SendTimeUTC).UTC()
 	tableName := PartitionTableName(t)
 
 	w.lock.Lock()
-	if !w.knownPartitions[tableName] {
-		_ = EnsurePartitionTableTx(tx, tableName)
-		w.knownPartitions[tableName] = true
-	}
+	known := w.knownPartitions[tableName]
 	w.lock.Unlock()
+	if !known {
+		if err := EnsurePartitionTableTx(tx, tableName); err != nil {
+			return fmt.Errorf("create %s: %w", tableName, err)
+		}
+		// Only remember the table once it was created; if this batch rolls
+		// back, the next one will try again.
+		w.lock.Lock()
+		w.knownPartitions[tableName] = true
+		w.lock.Unlock()
+	}
 
 	stmt, ok := stmts[tableName]
 	if !ok {
@@ -360,7 +408,7 @@ func (w *StoreWriter) writeSampleTx(tx *sql.Tx, s probe.ProbeResult, stmts map[s
 		var err error
 		stmt, err = tx.Prepare(query)
 		if err != nil {
-			return
+			return err
 		}
 		stmts[tableName] = stmt
 	}
@@ -379,7 +427,7 @@ func (w *StoreWriter) writeSampleTx(tx *sql.Tx, s probe.ProbeResult, stmts map[s
 		errVal = int(s.ErrCode)
 	}
 
-	_, _ = stmt.Exec(
+	_, err := stmt.Exec(
 		s.SendTimeUTC,
 		s.TargetID,
 		reachedInt,
@@ -394,6 +442,7 @@ func (w *StoreWriter) writeSampleTx(tx *sql.Tx, s probe.ProbeResult, stmts map[s
 		s.HTTPStatus,
 		s.ErrText,
 	)
+	return err
 }
 
 func (w *StoreWriter) accumulateRollup(s probe.ProbeResult) {
@@ -447,6 +496,7 @@ func (w *StoreWriter) flushMatureRollups(now time.Time) {
 
 	tx, err := w.db.Begin()
 	if err != nil {
+		w.noteError("begin rollups", err)
 		return
 	}
 	defer tx.Rollback()
@@ -457,13 +507,14 @@ func (w *StoreWriter) flushMatureRollups(now time.Time) {
 
 	stmt, err := tx.Prepare(query)
 	if err != nil {
+		w.noteError("prepare rollups", err)
 		return
 	}
 	defer stmt.Close()
 
 	for k, acc := range toFlush {
 		minUS, p50US, p95US, maxUS, jitterUS := computeRollupMetrics(acc.rtts)
-		_, _ = stmt.Exec(
+		_, err := stmt.Exec(
 			k.bucketMS,
 			k.targetID,
 			acc.sent,
@@ -476,9 +527,10 @@ func (w *StoreWriter) flushMatureRollups(now time.Time) {
 			maxUS,
 			jitterUS,
 		)
+		w.noteError("write rollup", err)
 	}
 
-	_ = tx.Commit()
+	w.noteError("commit rollups", tx.Commit())
 }
 
 func computeRollupMetrics(rtts []int64) (int64, int64, int64, int64, int64) {
@@ -521,7 +573,7 @@ func computeRollupMetrics(rtts []int64) (int64, int64, int64, int64, int64) {
 	return minUS, p50US, p95US, maxUS, jitterUS
 }
 
-func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) {
+func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) error {
 	query := `INSERT INTO events (
 		id, kind, classification, network_id, start_ms, start_uncert_ms, end_ms, end_uncert_ms,
 		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context
@@ -536,7 +588,7 @@ func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) {
 		gateway_ok_pct = excluded.gateway_ok_pct,
 		isp_hop_ok_pct = excluded.isp_hop_ok_pct;`
 
-	_, _ = tx.Exec(
+	_, err := tx.Exec(
 		query,
 		e.ID,
 		string(e.Kind),
@@ -553,22 +605,25 @@ func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) {
 		e.ISPHopOKPct,
 		e.ContextJSON,
 	)
+	return err
 }
 
-func (w *StoreWriter) writeSysEventTx(tx *sql.Tx, se netenv.SystemEvent) {
+func (w *StoreWriter) writeSysEventTx(tx *sql.Tx, se netenv.SystemEvent) error {
 	query := `INSERT INTO system_events (ts_ms, kind, detail) VALUES (?, ?, ?);`
-	_, _ = tx.Exec(query, se.Timestamp, string(se.Kind), se.Detail)
+	_, err := tx.Exec(query, se.Timestamp, string(se.Kind), se.Detail)
+	return err
 }
 
-func (w *StoreWriter) writeTargetTx(tx *sql.Tx, t probe.Target) {
+func (w *StoreWriter) writeTargetTx(tx *sql.Tx, t probe.Target) error {
 	query := `INSERT INTO targets (id, layer, address, label, first_seen_ms)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(layer, address) DO UPDATE SET
 			label = excluded.label;`
-	_, _ = tx.Exec(query, t.ID, string(t.Layer), t.Address, t.Label, time.Now().UTC().UnixMilli())
+	_, err := tx.Exec(query, t.ID, string(t.Layer), t.Address, t.Label, time.Now().UTC().UnixMilli())
+	return err
 }
 
-func (w *StoreWriter) writeNetworkTx(tx *sql.Tx, n NetworkRecord) {
+func (w *StoreWriter) writeNetworkTx(tx *sql.Tx, n NetworkRecord) error {
 	query := `INSERT INTO networks (id, fingerprint, gateway_ip, gateway_mac, ssid, label, first_seen_ms, last_seen_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(fingerprint) DO UPDATE SET
@@ -576,15 +631,17 @@ func (w *StoreWriter) writeNetworkTx(tx *sql.Tx, n NetworkRecord) {
 			gateway_ip = excluded.gateway_ip,
 			gateway_mac = excluded.gateway_mac,
 			ssid = excluded.ssid;`
-	_, _ = tx.Exec(query, n.ID, n.Fingerprint, n.GatewayIP, n.GatewayMAC, n.SSID, n.Label, n.FirstSeenMS, n.LastSeenMS)
+	_, err := tx.Exec(query, n.ID, n.Fingerprint, n.GatewayIP, n.GatewayMAC, n.SSID, n.Label, n.FirstSeenMS, n.LastSeenMS)
+	return err
 }
 
-func (w *StoreWriter) writeCoverageTx(tx *sql.Tx, c CoverageRecord) {
+func (w *StoreWriter) writeCoverageTx(tx *sql.Tx, c CoverageRecord) error {
 	query := `INSERT INTO coverage (id, network_id, start_ms, heartbeat_ms, end_ms, end_reason)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			heartbeat_ms = excluded.heartbeat_ms,
 			end_ms = excluded.end_ms,
 			end_reason = excluded.end_reason;`
-	_, _ = tx.Exec(query, c.ID, c.NetworkID, c.StartMS, c.HeartbeatMS, c.EndMS, c.EndReason)
+	_, err := tx.Exec(query, c.ID, c.NetworkID, c.StartMS, c.HeartbeatMS, c.EndMS, c.EndReason)
+	return err
 }

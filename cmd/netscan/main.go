@@ -256,7 +256,7 @@ func main() {
 		}
 	})
 
-	srv, err := server.NewServer(cfg, storeReader, storeWriter, det, h, sched, netEnv, version)
+	srv, err := server.NewServer(cfg, storeReader, storeWriter, det, h, sched, netEnv, registry, version)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)
@@ -278,6 +278,10 @@ func main() {
 		shuttingDown.Store(true)
 		shutdownOnce.Do(func() {
 			logger.Info("shutting down netscan", "reason", reason)
+			if evt := det.CloseForShutdown(); evt != nil {
+				storeWriter.QueueEvent(*evt)
+				h.PublishEvent(*evt)
+			}
 			rootCancel()
 			if !supervisor.Stop(5 * time.Second) {
 				logger.Warn("components did not stop in time")

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/aaronburt/netscan/internal/export"
 	"github.com/aaronburt/netscan/internal/hub"
 	"github.com/aaronburt/netscan/internal/netenv"
+	"github.com/aaronburt/netscan/internal/probe"
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/store"
 	"github.com/aaronburt/netscan/internal/updater"
@@ -36,6 +38,7 @@ type Server struct {
 	hub         *hub.Hub
 	scheduler   *scheduler.Scheduler
 	netEnv      *netenv.NetEnv
+	registry    *probe.TargetRegistry
 	updaterMgr  *updater.Manager
 	version     string
 
@@ -54,6 +57,7 @@ func NewServer(
 	h *hub.Hub,
 	sched *scheduler.Scheduler,
 	ne *netenv.NetEnv,
+	reg *probe.TargetRegistry,
 	version string,
 ) (*Server, error) {
 	tokenBytes := make([]byte, 16)
@@ -68,6 +72,7 @@ func NewServer(
 		hub:         h,
 		scheduler:   sched,
 		netEnv:      ne,
+		registry:    reg,
 		version:     version,
 		csrfToken:   token,
 	}, nil
@@ -175,6 +180,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/styles.css", s.handleStyles)
 	mux.HandleFunc("/app.js", s.handleAppJS)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/targets", s.handleTargets)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/events/", s.handleEventDetail)
@@ -269,12 +275,20 @@ func (s *Server) handleAppJS(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	snap := s.detector.GetSnapshot()
 	netInfo := s.netEnv.GetNetworkInfo()
+	gatewayIP := ""
+	if netInfo.GatewayIP != nil {
+		gatewayIP = netInfo.GatewayIP.String()
+	}
 
 	payload := map[string]any{
 		"version":  s.version,
 		"snapshot": snap,
+		"store":    s.storeWriter.Stats(),
+		"scheduler": map[string]any{
+			"dropped_results": s.scheduler.DroppedResults(),
+		},
 		"network": map[string]any{
-			"gateway_ip":  netInfo.GatewayIP.String(),
+			"gateway_ip":  gatewayIP,
 			"gateway_mac": netInfo.GatewayMAC,
 			"is_vpn":      netInfo.IsVPN,
 			"interface":   netInfo.InterfaceName,
@@ -283,6 +297,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// handleTargets lists every target currently being probed, so the dashboard
+// can label and group them without hard-coding ids.
+func (s *Server) handleTargets(w http.ResponseWriter, _ *http.Request) {
+	targets := []probe.Target{}
+	if s.registry != nil {
+		targets = s.registry.GetAllTargets()
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(targets)
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
