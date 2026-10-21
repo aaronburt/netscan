@@ -3,6 +3,7 @@ package updater
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -93,4 +94,11 @@ func InstallBinaryWithRetry(sourcePath, targetPath string) error {
 	}
 
 	return fmt.Errorf("failed to install binary to %s: %w", targetPath, lastErr)
+}
+
+func StartDetachedProcess(cmd *exec.Cmd) error {
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.DETACHED_PROCESS,
+	}
+	return cmd.Start()
 }

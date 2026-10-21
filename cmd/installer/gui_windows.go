@@ -36,6 +36,7 @@ var (
 	procGetSystemMetrics      = modUser32.NewProc("GetSystemMetrics")
 	procInitCommonControlsEx  = modComctl32.NewProc("InitCommonControlsEx")
 	procCreateFontW           = modGdi32.NewProc("CreateFontW")
+	procDeleteObject          = modGdi32.NewProc("DeleteObject")
 )
 
 const (
@@ -390,6 +391,14 @@ func wndProc(hwnd windows.HWND, msg uint32, wParam uintptr, lParam uintptr) uint
 		return 0
 
 	case WM_DESTROY:
+		if hFontBold != 0 {
+			_, _, _ = procDeleteObject.Call(uintptr(hFontBold))
+			hFontBold = 0
+		}
+		if hFontNormal != 0 {
+			_, _, _ = procDeleteObject.Call(uintptr(hFontNormal))
+			hFontNormal = 0
+		}
 		_, _, _ = procPostQuitMessage.Call(0)
 		return 0
 	}
@@ -399,9 +408,10 @@ func wndProc(hwnd windows.HWND, msg uint32, wParam uintptr, lParam uintptr) uint
 }
 
 func pickFolder(initial string) string {
+	safe := strings.ReplaceAll(initial, "'", "''")
 	script := fmt.Sprintf(
 		`Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.SelectedPath = '%s'; $f.Description = 'Select NetScan Install Directory'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }`,
-		initial,
+		safe,
 	)
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
 	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}

@@ -540,7 +540,7 @@ func RelaunchExecutable(args []string) error {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := StartDetachedProcess(cmd); err != nil {
 		return fmt.Errorf("failed to start updated application: %w", err)
 	}
 	return nil
@@ -576,7 +576,7 @@ func LaunchUpdaterHelper(updaterPath, targetExePath, stagedExePath string, pid i
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := StartDetachedProcess(cmd); err != nil {
 		return fmt.Errorf("failed to start updater helper: %w", err)
 	}
 	return nil

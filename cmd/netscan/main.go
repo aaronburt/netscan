@@ -234,6 +234,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer srv.Stop()
+	defer os.Remove(config.PortPath())
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	supervisor := app.NewSupervisor(logger)

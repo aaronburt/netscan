@@ -136,8 +136,7 @@ func extractZipFile(f *zip.File, destPath string) error {
 		return copyErr
 	}
 
-	_ = os.Remove(destPath)
-	return os.Rename(tmpPath, destPath)
+	return updater.InstallBinaryWithRetry(tmpPath, destPath)
 }
 
 func copyFile(src, dst string) error {
@@ -160,8 +159,7 @@ func copyFile(src, dst string) error {
 		return copyErr
 	}
 
-	_ = os.Remove(dst)
-	return os.Rename(tmpDst, dst)
+	return updater.InstallBinaryWithRetry(tmpDst, dst)
 }
 
 func copySelfAsUninstaller(exePath, targetDir string) error {
@@ -214,12 +212,17 @@ func RemoveStartMenuShortcut() error {
 }
 
 func createShortcut(targetExe, lnkPath, description string) error {
+	safeLnk := strings.ReplaceAll(lnkPath, "'", "''")
+	safeExe := strings.ReplaceAll(targetExe, "'", "''")
+	safeDir := strings.ReplaceAll(filepath.Dir(targetExe), "'", "''")
+	safeDesc := strings.ReplaceAll(description, "'", "''")
+
 	script := fmt.Sprintf(
 		"$ws=New-Object -ComObject WScript.Shell;$s=$ws.CreateShortcut('%s');$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.Description='%s';$s.Save()",
-		lnkPath,
-		targetExe,
-		filepath.Dir(targetExe),
-		description,
+		safeLnk,
+		safeExe,
+		safeDir,
+		safeDesc,
 	)
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
 	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}

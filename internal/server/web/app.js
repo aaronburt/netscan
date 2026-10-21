@@ -469,6 +469,10 @@ async function openDrawer(id) {
     const samples = detail.samples || [];
 
     const norm = normalizeEvent(ev);
+    const gwSample = samples.find(sm => (sm.target_id === 1 || sm.layer === 'gw') && sm.ok);
+    if (gwSample && gwSample.rtt_us > 0) {
+      norm.gwRtt = +(gwSample.rtt_us / 1000).toFixed(1);
+    }
     const c = CLS[norm.cls] || CLS.wan;
     const end = norm.start + norm.dur;
 
@@ -650,14 +654,51 @@ function ingestSnapshot(snap) {
     v[s.id] = (raw != null && raw > 0) ? Math.max(0.4, +(raw / 1000).toFixed(1)) : null;
   });
 
-  live.push({ ts: snap.ts_ms || Date.now(), v: v });
-  if (live.length > 60) {
-    live.shift();
+  const now = snap.ts_ms || Date.now();
+  const last = live.length ? live[live.length - 1] : null;
+  if (!last || (now - last.ts) >= 950) {
+    live.push({ ts: now, v: v });
+    if (live.length > 60) {
+      live.shift();
+    }
+  } else {
+    live[live.length - 1] = { ts: now, v: v };
   }
 
   renderStatus();
   renderTiles();
   renderChart();
+}
+
+async function fetchRecentSamples() {
+  const toMS = Date.now();
+  const fromMS = toMS - 60000;
+  try {
+    const res = await fetch('/api/samples?from=' + fromMS + '&to=' + toMS + '&limit=500');
+    const data = await res.json();
+    if (Array.isArray(data) && data.length) {
+      data.forEach(sm => {
+        const ts = sm.ts_ms;
+        const bucketIdx = Math.floor((ts - fromMS) / 1000);
+        if (bucketIdx >= 0 && bucketIdx < live.length) {
+          const s = SER.find(sr => {
+            if (sr.id === 'gw') return sm.target_id === 1 || sm.layer === 'gw';
+            if (sr.id === 'icmp') return sm.target_id >= 10 && sm.target_id < 20 || sm.layer === 'wan_icmp';
+            if (sr.id === 'tcp') return sm.target_id >= 20 && sm.target_id < 30 || sm.layer === 'wan_tcp';
+            if (sr.id === 'dns') return sm.target_id >= 30 && sm.target_id < 40 || sm.layer === 'dns';
+            if (sr.id === 'http') return sm.target_id >= 40 && sm.target_id < 50 || sm.layer === 'http';
+            return false;
+          });
+          if (s) {
+            live[bucketIdx].v[s.id] = sm.ok && sm.rtt_us > 0 ? +(sm.rtt_us / 1000).toFixed(1) : null;
+          }
+        }
+      });
+      renderStatus();
+      renderTiles();
+      renderChart();
+    }
+  } catch (_) {}
 }
 
 function connectSSE() {
@@ -1008,10 +1049,9 @@ function init() {
   const now = Date.now();
   for (let i = 0; i < 60; i++) {
     const ts = now - (59 - i) * 1000;
-    live.push({
-      ts: ts,
-      v: { gw: 1.5, icmp: 14.0, tcp: 16.5, dns: 22.0, http: 42.0 }
-    });
+    const v = {};
+    SER.forEach(s => { v[s.id] = null; });
+    live.push({ ts: ts, v: v });
   }
 
   renderStatus();
@@ -1022,6 +1062,7 @@ function init() {
 
   fetchStatus();
   fetchEvents();
+  fetchRecentSamples();
   connectSSE();
   checkUpdateStatus();
 

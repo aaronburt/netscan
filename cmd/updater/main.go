@@ -115,7 +115,7 @@ func main() {
 		cmd.Stdin = nil
 		cmd.Stdout = nil
 		cmd.Stderr = nil
-		if err := cmd.Start(); err != nil {
+		if err := updater.StartDetachedProcess(cmd); err != nil {
 			fmt.Fprintf(os.Stderr, "updater: failed to relaunch %s: %v\n", targetPath, err)
 			os.Exit(1)
 		}
