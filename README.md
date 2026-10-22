@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="96" alt="NetScan logo"></p>
+
 # NetScan
 
 A lightweight Windows internet stability monitor designed to detect micro-drops, isolate connection faults, and log historical network health.
@@ -12,6 +14,8 @@ A lightweight Windows internet stability monitor designed to detect micro-drops,
 - **Self-Updating**: Direct GitHub release checking, background notifications, and one-click in-place updates.
 
 ## Build
+
+The app icon lives in `assets/logo.svg`. The Windows resource files (`cmd/*/rsrc_windows_amd64.syso`) embed `assets/logo.ico` and are picked up automatically by `go build`. To regenerate after changing the logo: `rsrc -ico assets/logo.ico -arch amd64 -o cmd/netscan/rsrc_windows_amd64.syso` (and copy to `cmd/installer/`).
 
 ```powershell
 go build -ldflags "-H=windowsgui" -o dist\netscan.exe ./cmd/netscan
