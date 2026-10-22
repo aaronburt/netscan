@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     branches: [main]
+  # Re-run the build for an existing release (e.g. if the release job failed
+  # after the tag was created): Actions -> Release -> Run workflow, tag "v0.5.0".
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build and upload assets for
+        required: true
 
 permissions:
   contents: write
@@ -24,17 +31,21 @@ jobs:
 
   build:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     defaults:
       run:
         shell: pwsh
     env:
-      VERSION: ${{ needs.release-please.outputs.version }}
-      TAG: ${{ needs.release-please.outputs.tag_name }}
+      TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+
+      - name: Set version
+        run: '"VERSION=$($env:TAG -replace ''^v'','''')" >> $env:GITHUB_ENV'
 
       - uses: actions/setup-go@v5
         with:
