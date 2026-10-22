@@ -29,11 +29,16 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./...
+      - name: Test with coverage gate
+        shell: bash
+        run: scripts/coverage.sh 70
 
       - name: Build binary
         run: go build -v -ldflags "-H=windowsgui" -o netscan.exe ./cmd/netscan
+
+      - name: Smoke test binary
+        shell: bash
+        run: scripts/smoke.sh "$PWD/netscan.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
