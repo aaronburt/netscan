@@ -415,6 +415,15 @@ func main() {
 
 	trayMgr.Run(rootCtx)
 
+	if shuttingDown.Load() {
+		// The tray loop ends because shutdown cancelled rootCtx. When that
+		// was for an update, the updater manager is still about to launch the
+		// helper and exit on its own, so returning here would kill the
+		// process before the relaunch. Every other exit path calls os.Exit.
+		time.Sleep(30 * time.Second)
+		return
+	}
+
 	if !shuttingDown.Load() {
 		logger.Warn("tray loop exited or unavailable, continuing in headless mode")
 		sigCh := make(chan os.Signal, 1)
