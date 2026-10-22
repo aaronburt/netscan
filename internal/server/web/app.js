@@ -3,9 +3,9 @@ const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribut
 const SER = [
   { id: 'gw', name: 'Gateway', short: 'GW', targetId: 1, target: 'detecting...' },
   { id: 'icmp', name: 'WAN ICMP', short: 'ICMP', targetId: 10, target: '1.1.1.1' },
-  { id: 'tcp', name: 'WAN TCP', short: 'TCP', targetId: 20, target: '1.1.1.1:443' },
-  { id: 'dns', name: 'DNS', short: 'DNS', targetId: 30, target: '1.1.1.1:53' },
-  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 50, target: 'connectivitycheck.gstatic.com' }
+  { id: 'tcp', name: 'WAN TCP', short: 'TCP', targetId: 20, target: '1.1.1.1:443', slow: true },
+  { id: 'dns', name: 'DNS', short: 'DNS', targetId: 30, target: '1.1.1.1:53', slow: true },
+  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 50, target: 'connectivitycheck.gstatic.com', slow: true }
 ];
 
 // Which chart series each backend layer belongs to. The ISP hop isn't charted.
@@ -14,6 +14,11 @@ const LAYER_SER = { gateway: 'gw', wan_icmp: 'icmp', wan_tcp: 'tcp', dns: 'dns',
 // Target id -> series id, filled from /api/targets. Until that loads, fall
 // back to the default id ranges.
 let TARGET_SER = {};
+
+// When each series was last probed (ms), from the snapshot. TCP, DNS and HTTP
+// are only checked every few seconds in normal mode, so their tiles show
+// how fresh the result is instead of a per-second history.
+let lastProbeMS = {};
 
 function serForTargetId(id) {
   id = +id;
@@ -148,16 +153,16 @@ function calcState() {
   if (backendState && backendState !== 'suspended') return backendState;
   if (!live.length) return 'healthy';
   const last = live[live.length - 1];
-  const wanDown = last.v.icmp == null && last.v.tcp == null;
-  const gwDown = last.v.gw == null;
+  const wanDown = last.v.icmp === null && last.v.tcp === null;
+  const gwDown = last.v.gw === null;
   if (wanDown || gwDown) {
     const prev = live.length > 1 ? live[live.length - 2] : null;
-    if (prev && ((prev.v.icmp == null && prev.v.tcp == null) || prev.v.gw == null)) {
+    if (prev && ((prev.v.icmp === null && prev.v.tcp === null) || prev.v.gw === null)) {
       return 'outage';
     }
     return 'degraded';
   }
-  const anyBad = SER.some(s => last.v[s.id] == null);
+  const anyBad = SER.some(s => last.v[s.id] === null);
   if (anyBad) return 'degraded';
   return 'healthy';
 }
@@ -235,23 +240,27 @@ function renderTiles() {
     const last = vals.length ? vals[vals.length - 1] : null;
     const ok = vals.filter(v => v != null);
     const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : 0;
-    const loss = vals.length ? 100 * (vals.length - ok.length) / vals.length : 0;
+    const seen = vals.filter(v => v !== undefined);
+    const loss = seen.length ? 100 * (seen.length - ok.length) / seen.length : 0;
     const mx = Math.max.apply(null, ok.concat([10]));
     const W = 200;
     const H = 32;
     const x = i => 2 + i * (W - 8) / Math.max(1, vals.length - 1);
     const y = v => H - 3 - (v / mx) * (H - 8);
     const d = pathD(vals, x, y);
-    const fails = vals.map((v, i) => v == null ? '<line class="fail-tick" x1="' + x(i).toFixed(1) + '" x2="' + x(i).toFixed(1) + '" y1="' + (H - 8) + '" y2="' + (H - 1) + '"/>' : '').join('');
+    const fails = vals.map((v, i) => v === null ? '<line class="fail-tick" x1="' + x(i).toFixed(1) + '" x2="' + x(i).toFixed(1) + '" y1="' + (H - 8) + '" y2="' + (H - 1) + '"/>' : '').join('');
     const lastOk = last != null;
+    const noData = last === undefined;
     const ex = x(vals.length - 1);
     const spark = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true"><path class="ln" style="stroke-width:1.6" d="' + d + '" vector-effect="non-scaling-stroke"/>' + fails + (lastOk ? '<circle class="dot" cx="' + ex.toFixed(1) + '" cy="' + y(last).toFixed(1) + '" r="3"/>' : '') + '</svg>';
 
     return '<div class="tile card c-' + s.id + '"><div class="tile-h"><span class="tile-n"><i class="sw"></i>' + s.name + '</span>' +
-      (lastOk ? '<span class="pill good">' + ICO.check + 'OK</span>' : '<span class="pill bad">' + ICO.x + 'Timeout</span>') + '</div>' +
+      (lastOk ? '<span class="pill good">' + ICO.check + 'OK</span>' : noData ? '<span class="pill">Waiting</span>' : '<span class="pill bad">' + ICO.x + 'Timeout</span>') + '</div>' +
       '<div class="tile-t">' + esc(s.target) + '</div>' +
-      '<div class="tile-v">' + (lastOk ? '<b>' + last.toFixed(1) + '</b><span>ms</span>' : '<b class="bad">no answer</b>') + '</div>' + spark +
-      '<div class="tile-f"><span>60 s avg <b>' + avg.toFixed(1) + ' ms</b></span><span>loss <b>' + loss.toFixed(1) + '%</b></span></div></div>';
+      '<div class="tile-v">' + (lastOk ? '<b>' + last.toFixed(1) + '</b><span>ms</span>' : noData ? '<b>waiting</b>' : '<b class="bad">no answer</b>') + '</div>' + spark +
+      (s.slow
+        ? '<div class="tile-f"><span>checked <b>' + (lastProbeMS[s.id] ? fmtAgo(Date.now() - lastProbeMS[s.id]) + ' ago' : 'n/a') + '</b></span><span>rotates targets</span></div></div>'
+        : '<div class="tile-f"><span>60 s avg <b>' + avg.toFixed(1) + ' ms</b></span><span>loss <b>' + loss.toFixed(1) + '%</b></span></div></div>');
   }).join('');
 }
 
@@ -287,7 +296,7 @@ function renderChart() {
   });
   g += '<text x="' + (CL - 8) + '" y="' + (CH - 8) + '" text-anchor="end" style="font-size:10px">ms</text>';
 
-  const wan = live.map(p => p.v.icmp == null && p.v.tcp == null);
+  const wan = live.map(p => p.v.icmp === null && p.v.tcp === null);
   let bands = '';
   const inWan = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -314,7 +323,7 @@ function renderChart() {
   for (let i = 0; i < n; i++) {
     if (!inWan[i]) {
       SER.forEach((s, k) => {
-        if (live[i].v[s.id] == null) {
+        if (live[i].v[s.id] === null) {
           ticks += '<line class="fail-tick" x1="' + (cx(i) + (k - 2) * 2.5).toFixed(1) + '" x2="' + (cx(i) + (k - 2) * 2.5).toFixed(1) + '" y1="' + (CH - CB - 9) + '" y2="' + (CH - CB - 1) + '"/>';
         }
       });
@@ -327,7 +336,7 @@ function renderChart() {
   const p = live[hover != null ? hover : n - 1];
   $('legend').innerHTML = SER.map(s => {
     const v = p.v[s.id];
-    return '<span class="c-' + s.id + '"><i></i>' + s.name + ' <b>' + (v == null ? 'timeout' : v.toFixed(1) + ' ms') + '</b></span>';
+    return '<span class="c-' + s.id + '"><i></i>' + s.name + ' <b>' + (v === undefined ? 'waiting' : v === null ? 'timeout' : v.toFixed(1) + ' ms') + '</b></span>';
   }).join('') + '<span class="at">' + (hover != null ? fmtT(p.ts, true) : 'live') + '</span>';
 }
 
@@ -725,6 +734,25 @@ function ingestSnapshot(snap) {
     v[s.id] = (raw != null && raw > 0) ? Math.max(0.4, +(raw / 1000).toFixed(1)) : null;
   });
 
+  // A layer the detector has confirmed down is a timeout even if another
+  // target of that layer answered a while ago. A slow layer that hasn't
+  // been probed yet has no data, which isn't the same as a failure.
+  const statuses = snap.layer_statuses || {};
+  SER.forEach(sr => {
+    if (!sr.slow || v[sr.id] !== null) return;
+    const layer = Object.keys(LAYER_SER).find(l => LAYER_SER[l] === sr.id);
+    if (!statuses[layer]) v[sr.id] = undefined;
+  });
+  Object.keys(statuses).forEach(layer => {
+    const sid = LAYER_SER[layer];
+    if (sid && statuses[layer] === 3) v[sid] = null;
+  });
+  const probed = snap.last_probe_ms || {};
+  Object.keys(probed).forEach(layer => {
+    const sid = LAYER_SER[layer];
+    if (sid) lastProbeMS[sid] = probed[layer];
+  });
+
   const now = snap.ts_ms || Date.now();
   const last = live.length ? live[live.length - 1] : null;
   if (!last || (now - last.ts) >= 950) {
@@ -756,6 +784,15 @@ async function fetchRecentSamples() {
           const s = sid ? BYID[sid] : null;
           if (s) {
             live[bucketIdx].v[s.id] = sm.ok && sm.rtt_us > 0 ? +(sm.rtt_us / 1000).toFixed(1) : null;
+          }
+        }
+      });
+      // Slow layers are only probed every few seconds; carry the last good
+      // value across the gap so it doesn't look like missing data.
+      SER.filter(sr => sr.slow).forEach(sr => {
+        for (let i = 1; i < live.length; i++) {
+          if (live[i].v[sr.id] === undefined && typeof live[i - 1].v[sr.id] === 'number') {
+            live[i].v[sr.id] = live[i - 1].v[sr.id];
           }
         }
       });
@@ -1038,7 +1075,7 @@ function setupResetManager() {
         for (let i = 0; i < 60; i++) {
           const ts = now - (59 - i) * 1000;
           const v = {};
-          SER.forEach(s => { v[s.id] = null; });
+          SER.forEach(s => { v[s.id] = undefined; }); // no data yet (null means a failed probe)
           live.push({ ts: ts, v: v });
         }
         renderStatus();
@@ -1166,7 +1203,7 @@ function init() {
   for (let i = 0; i < 60; i++) {
     const ts = now - (59 - i) * 1000;
     const v = {};
-    SER.forEach(s => { v[s.id] = null; });
+    SER.forEach(s => { v[s.id] = undefined; }); // no data yet (null means a failed probe)
     live.push({ ts: ts, v: v });
   }
 

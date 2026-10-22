@@ -102,3 +102,72 @@ func TestLoadConfigMalformedJSON(t *testing.T) {
 		t.Fatalf("expected defaults, got port %d", cfg.HTTP.Port)
 	}
 }
+
+func TestNormalModePeriodDefaults(t *testing.T) {
+	iv := config.DefaultConfig().Intervals
+	if iv.ISPHopMS != 2000 || iv.WANICMPSecondaryMS != 5000 || iv.WANTCPMS != 5000 || iv.DNSMS != 5000 || iv.HTTPMS != 15000 {
+		t.Fatalf("unexpected default periods: %+v", iv)
+	}
+}
+
+// Configs written by older versions don't have the period keys; they should
+// pick up the defaults instead of ending up with zero.
+func TestOldConfigGetsPeriodDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	old := `{"intervals":{"normal_ms":1000,"fast_ms":500,"fast_exit_healthy_s":10,"fast_max_outage_s":120}}`
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Intervals.DNSMS != 5000 || cfg.Intervals.HTTPMS != 15000 {
+		t.Fatalf("periods not defaulted: %+v", cfg.Intervals)
+	}
+}
+
+func TestPeriodsNeverBelowNormalInterval(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Intervals.NormalMS = 2000
+	cfg.Intervals.DNSMS = 500
+	cfg.Intervals.HTTPMS = 0
+	cfg.ValidateAndApplyMinimums()
+	if cfg.Intervals.DNSMS != 2000 {
+		t.Fatalf("DNSMS = %d, want it raised to 2000", cfg.Intervals.DNSMS)
+	}
+	if cfg.Intervals.HTTPMS != 15000 {
+		t.Fatalf("HTTPMS = %d, want the default for an unset value", cfg.Intervals.HTTPMS)
+	}
+}
+
+// A custom "http" list must not inherit body_prefix from the default entry
+// at the same position, or every check against it would fail.
+func TestCustomHTTPTargetsDoNotInheritDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	custom := `{"targets":{"http":[{"url":"http://a.test/x","status":204},{"url":"http://b.test/y","status":200}]}}`
+	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Targets.HTTP) != 2 {
+		t.Fatalf("got %d http targets, want 2", len(cfg.Targets.HTTP))
+	}
+	for _, h := range cfg.Targets.HTTP {
+		if h.BodyPrefix != "" {
+			t.Fatalf("%s inherited body_prefix %q from a default", h.URL, h.BodyPrefix)
+		}
+	}
+
+	// Leaving "http" out still gives the defaults.
+	if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = config.LoadConfig(path)
+	if len(cfg.Targets.HTTP) != 3 || cfg.Targets.HTTP[1].BodyPrefix == "" {
+		t.Fatalf("default http targets not restored: %+v", cfg.Targets.HTTP)
+	}
+}
