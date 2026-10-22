@@ -95,6 +95,15 @@ func TestServerHealthAndStatic(t *testing.T) {
 	if resCSS.Header.Get("Content-Type") != "text/css; charset=utf-8" {
 		t.Fatalf("expected text/css, got %s", resCSS.Header.Get("Content-Type"))
 	}
+
+	resIcon, err := http.Get(baseURL + "/favicon.svg")
+	if err != nil {
+		t.Fatalf("failed to get /favicon.svg: %v", err)
+	}
+	defer resIcon.Body.Close()
+	if resIcon.Header.Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %s", resIcon.Header.Get("Content-Type"))
+	}
 }
 
 func TestServerSecurityMiddleware(t *testing.T) {

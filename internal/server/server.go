@@ -178,6 +178,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/styles.css", s.handleStyles)
+	mux.HandleFunc("/favicon.svg", s.handleFavicon)
 	mux.HandleFunc("/app.js", s.handleAppJS)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/targets", s.handleTargets)
@@ -258,6 +259,17 @@ func (s *Server) handleStyles(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	_, _ = w.Write(content)
+}
+
+func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	content, err := webFS.ReadFile("web/favicon.svg")
+	if err != nil {
+		http.Error(w, "Failed to load favicon.svg", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(content)
 }
 
