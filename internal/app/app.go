@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -150,6 +151,12 @@ func SetupLogger(headless bool) (*slog.Logger, io.Closer) {
 
 func HandleExistingInstance(logger *slog.Logger) bool {
 	portData, err := os.ReadFile(config.PortPath())
+	if errors.Is(err, os.ErrNotExist) {
+		// The running instance has its dashboard turned off, so there is
+		// nothing to open.
+		logger.Info("another instance is running with the web UI disabled")
+		return true
+	}
 	if err != nil {
 		logger.Error("another instance is running, but port file could not be read", "error", err)
 		return false

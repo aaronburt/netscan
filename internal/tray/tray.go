@@ -14,7 +14,9 @@ import (
 )
 
 type TrayManager struct {
-	port          int
+	port          func() int
+	webUIEnabled  bool
+	onWebUIToggle func(enable bool) (bool, error)
 	hub           *hub.Hub
 	updaterMgr    *updater.Manager
 	onExit        func()
@@ -23,7 +25,7 @@ type TrayManager struct {
 	ready         bool
 }
 
-func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool, onReset func()) *TrayManager {
+func NewTrayManager(port func() int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool, onReset func()) *TrayManager {
 	return &TrayManager{
 		port:          port,
 		hub:           h,
@@ -32,6 +34,18 @@ func NewTrayManager(port int, h *hub.Hub, updaterMgr *updater.Manager, onExit fu
 		onPauseToggle: onPauseToggle,
 		onReset:       onReset,
 	}
+}
+
+// SetWebUI sets the initial dashboard state and the callback behind the
+// "Enable WebUI" item. The callback returns whether the dashboard is running
+// afterwards. Call before Run.
+func (tm *TrayManager) SetWebUI(enabled bool, toggle func(enable bool) (bool, error)) {
+	tm.webUIEnabled = enabled
+	tm.onWebUIToggle = toggle
+}
+
+func (tm *TrayManager) dashboardURL(path string) string {
+	return fmt.Sprintf("http://127.0.0.1:%d%s", tm.port(), path)
 }
 
 func (tm *TrayManager) Run(ctx context.Context) {
@@ -69,6 +83,24 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 	} else {
 		mAutostart.Uncheck()
 	}
+
+	mWebUI := systray.AddMenuItemCheckbox("Enable WebUI", "Serve the browser dashboard", tm.webUIEnabled)
+	if tm.webUIEnabled {
+		mWebUI.Check()
+	} else {
+		mWebUI.Uncheck()
+	}
+	dashItems := []*systray.MenuItem{mOpen, mExportReport, mExportCSV, mUpdate}
+	setDashItems := func(on bool) {
+		for _, it := range dashItems {
+			if on {
+				it.Enable()
+			} else {
+				it.Disable()
+			}
+		}
+	}
+	setDashItems(tm.webUIEnabled)
 
 	mReset := systray.AddMenuItem("Reset Timeline History...", "Clear all timeline and probe history")
 	mOpenFolder := systray.AddMenuItem("Open Data Folder", "Open logs and database location")
@@ -121,19 +153,19 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 				}
 
 			case <-mOpen.ClickedCh:
-				url := fmt.Sprintf("http://127.0.0.1:%d", tm.port)
+				url := tm.dashboardURL("")
 				_ = winapi.OpenDashboard(url)
 
 			case <-mUpdate.ClickedCh:
-				url := fmt.Sprintf("http://127.0.0.1:%d/#update", tm.port)
+				url := tm.dashboardURL("/#update")
 				_ = winapi.OpenDashboard(url)
 
 			case <-mExportReport.ClickedCh:
-				url := fmt.Sprintf("http://127.0.0.1:%d/api/export/isp-report.txt", tm.port)
+				url := tm.dashboardURL("/api/export/isp-report.txt")
 				_ = winapi.OpenDashboard(url)
 
 			case <-mExportCSV.ClickedCh:
-				url := fmt.Sprintf("http://127.0.0.1:%d/api/export/events.csv", tm.port)
+				url := tm.dashboardURL("/api/export/events.csv")
 				_ = winapi.OpenDashboard(url)
 
 			case <-mPause.ClickedCh:
@@ -158,6 +190,18 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 				} else {
 					mAutostart.Uncheck()
 				}
+
+			case <-mWebUI.ClickedCh:
+				if tm.onWebUIToggle == nil {
+					continue
+				}
+				running, _ := tm.onWebUIToggle(!mWebUI.Checked())
+				if running {
+					mWebUI.Check()
+				} else {
+					mWebUI.Uncheck()
+				}
+				setDashItems(running)
 
 			case <-mReset.ClickedCh:
 				if tm.onReset != nil {

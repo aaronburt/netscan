@@ -95,6 +95,10 @@ Open the dashboard in your browser:
 .\dist\netscan.exe -config path\to\config.json
 ```
 
+### Turning the Dashboard Off
+
+Right-click the tray icon and untick **Enable WebUI** to stop serving the dashboard. It takes effect immediately, is remembered across restarts (`"http": {"enabled": false}` in `config.json`), and probing and recording carry on as before. The dashboard-related tray items are greyed out while it is off.
+
 ### Checking & Installing Updates
 
 Check GitHub for available releases:

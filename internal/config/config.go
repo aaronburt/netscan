@@ -15,8 +15,12 @@ type HTTPTargetConfig struct {
 }
 
 type HTTPConfig struct {
-	Addr string `json:"addr"`
-	Port int    `json:"port"`
+	// Enabled turns the dashboard web server on or off. Probing and
+	// recording continue either way. Configs written before this field
+	// existed keep the dashboard on.
+	Enabled bool   `json:"enabled"`
+	Addr    string `json:"addr"`
+	Port    int    `json:"port"`
 }
 
 // IntervalsConfig controls how often probes run.
@@ -98,8 +102,9 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		HTTP: HTTPConfig{
-			Addr: "127.0.0.1",
-			Port: 9095,
+			Enabled: true,
+			Addr:    "127.0.0.1",
+			Port:    9095,
 		},
 		Intervals: IntervalsConfig{
 			NormalMS:         1000,
@@ -402,4 +407,15 @@ func SaveConfig(path string, cfg Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// SetWebUIEnabled persists the dashboard on/off choice, leaving the rest of
+// the config at what is on disk (or defaults if the file is missing).
+func SetWebUIEnabled(path string, enabled bool) error {
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	cfg.HTTP.Enabled = enabled
+	return SaveConfig(path, cfg)
 }

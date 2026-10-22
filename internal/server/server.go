@@ -90,7 +90,16 @@ func (s *Server) SetUpdaterManager(mgr *updater.Manager) {
 	s.updaterMgr = mgr
 }
 
+// Start binds the listener and serves the dashboard. It is a no-op if the
+// server is already running, and can be called again after Stop.
 func (s *Server) Start() error {
+	s.lock.Lock()
+	running := s.server != nil
+	s.lock.Unlock()
+	if running {
+		return nil
+	}
+
 	basePort := s.cfg.HTTP.Port
 	if basePort <= 0 {
 		basePort = 9095
@@ -112,35 +121,53 @@ func (s *Server) Start() error {
 		return fmt.Errorf("unable to bind to any port between %d and %d: %w", basePort, basePort+10, err)
 	}
 
-	s.lock.Lock()
-	s.port = chosenPort
-	s.listener = listener
-	s.lock.Unlock()
-
 	_ = os.WriteFile(config.PortPath(), []byte(strconv.Itoa(chosenPort)), 0644)
 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
 	handler := s.securityMiddleware(mux)
-	s.server = &http.Server{
+	srv := &http.Server{
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
 
+	s.lock.Lock()
+	s.port = chosenPort
+	s.listener = listener
+	s.server = srv
+	s.lock.Unlock()
+
 	go func() {
-		_ = s.server.Serve(listener)
+		_ = srv.Serve(listener)
 	}()
 
 	return nil
 }
 
+// Running reports whether the dashboard is currently being served.
+func (s *Server) Running() bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.server != nil
+}
+
+// Stop shuts the dashboard down and frees its port. The server can be
+// started again afterwards.
 func (s *Server) Stop() error {
-	if s.server != nil {
-		return s.server.Close()
+	s.lock.Lock()
+	srv := s.server
+	s.server = nil
+	s.listener = nil
+	s.port = 0
+	s.lock.Unlock()
+
+	if srv == nil {
+		return nil
 	}
-	return nil
+	_ = os.Remove(config.PortPath())
+	return srv.Close()
 }
 
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
