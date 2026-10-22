@@ -19,11 +19,25 @@ type HTTPConfig struct {
 	Port int    `json:"port"`
 }
 
+// IntervalsConfig controls how often probes run.
+//
+// In normal mode the gateway and the first WAN ping host run every NormalMS.
+// The other layers run less often, one rotating target at a time, on the
+// periods below. While something looks wrong, fast mode probes every target
+// every FastMS instead, so a failure is confirmed quickly.
 type IntervalsConfig struct {
 	NormalMS         int `json:"normal_ms"`
 	FastMS           int `json:"fast_ms"`
 	FastExitHealthyS int `json:"fast_exit_healthy_s"`
 	FastMaxOutageS   int `json:"fast_max_outage_s"`
+
+	// Normal-mode periods in milliseconds. A value below NormalMS is raised
+	// to NormalMS; set them all to NormalMS to probe every layer every tick.
+	ISPHopMS           int `json:"isp_hop_ms"`
+	WANICMPSecondaryMS int `json:"wan_icmp_secondary_ms"`
+	WANTCPMS           int `json:"wan_tcp_ms"`
+	DNSMS              int `json:"dns_ms"`
+	HTTPMS             int `json:"http_ms"`
 }
 
 type TimeoutsConfig struct {
@@ -92,6 +106,12 @@ func DefaultConfig() Config {
 			FastMS:           500,
 			FastExitHealthyS: 10,
 			FastMaxOutageS:   120,
+
+			ISPHopMS:           2000,
+			WANICMPSecondaryMS: 5000,
+			WANTCPMS:           5000,
+			DNSMS:              5000,
+			HTTPMS:             15000,
 		},
 		TimeoutsMS: TimeoutsConfig{
 			ICMP: 1000,
@@ -189,6 +209,23 @@ func (c *Config) ValidateAndApplyMinimums() {
 	}
 	if c.Intervals.FastMaxOutageS < 10 {
 		c.Intervals.FastMaxOutageS = d.Intervals.FastMaxOutageS
+	}
+	for _, p := range []struct {
+		v   *int
+		def int
+	}{
+		{&c.Intervals.ISPHopMS, d.Intervals.ISPHopMS},
+		{&c.Intervals.WANICMPSecondaryMS, d.Intervals.WANICMPSecondaryMS},
+		{&c.Intervals.WANTCPMS, d.Intervals.WANTCPMS},
+		{&c.Intervals.DNSMS, d.Intervals.DNSMS},
+		{&c.Intervals.HTTPMS, d.Intervals.HTTPMS},
+	} {
+		if *p.v <= 0 {
+			*p.v = p.def
+		}
+		if *p.v < c.Intervals.NormalMS {
+			*p.v = c.Intervals.NormalMS
+		}
 	}
 	if c.TimeoutsMS.ICMP < 200 {
 		c.TimeoutsMS.ICMP = d.TimeoutsMS.ICMP
@@ -338,6 +375,11 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	cfg := DefaultConfig()
+	// encoding/json decodes into the existing elements of a slice, so a
+	// shorter or different "http" list would inherit fields (like
+	// body_prefix) from the default entry at the same position. Start from
+	// empty; ValidateAndApplyMinimums puts the defaults back if it's absent.
+	cfg.Targets.HTTP = nil
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		cfg.ValidateAndApplyMinimums()
 		return cfg, err

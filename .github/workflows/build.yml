@@ -26,6 +26,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
       - name: Build binary
         run: go build -v -ldflags "-H=windowsgui" -o netscan.exe ./cmd/netscan
 
@@ -34,3 +40,23 @@ jobs:
         with:
           name: netscan-windows-amd64
           path: netscan.exe
+
+  test-linux:
+    name: Test (Linux, race detector)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
