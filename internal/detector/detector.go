@@ -252,7 +252,7 @@ func (d *Detector) evalMultiTargetLayer(targetIDs []int, maxAge time.Duration, n
 		return LayerStatusUnknown
 	}
 
-	if failCount > activeCount/2 {
+	if failCount == activeCount && activeCount >= 2 {
 		return LayerStatusDown
 	}
 	if failCount > 0 {
@@ -261,26 +261,23 @@ func (d *Detector) evalMultiTargetLayer(targetIDs []int, maxAge time.Duration, n
 	return LayerStatusUp
 }
 
-func (d *Detector) isWANDown() bool {
-	icmpDown := d.layerStatuses[probe.LayerWANICMP] == LayerStatusDown
-	tcpDown := d.layerStatuses[probe.LayerWANTCP] == LayerStatusDown
-	return icmpDown && tcpDown
+const minDownVotes = 2
+
+func (d *Detector) downVotes() int {
+	votes := 0
+	for _, l := range []probe.Layer{probe.LayerWANTCP, probe.LayerDNS, probe.LayerHTTP} {
+		if d.layerStatuses[l] == LayerStatusDown {
+			votes++
+		}
+	}
+	return votes
 }
 
-func (d *Detector) isAnyLayerDown() bool {
+func (d *Detector) isOutage(now time.Time) bool {
 	if d.layerStatuses[probe.LayerGateway] == LayerStatusDown {
 		return true
 	}
-	if d.isWANDown() {
-		return true
-	}
-	if d.layerStatuses[probe.LayerDNS] == LayerStatusDown {
-		return true
-	}
-	if d.layerStatuses[probe.LayerHTTP] == LayerStatusDown {
-		return true
-	}
-	return false
+	return d.downVotes() >= minDownVotes
 }
 
 func (d *Detector) isAnyLayerSuspect() bool {
@@ -308,7 +305,7 @@ func (d *Detector) isAllLayersUP() bool {
 }
 
 func (d *Detector) transitionOnProbe(now time.Time, hasLatency bool) (*Event, *Event) {
-	anyDown := d.isAnyLayerDown()
+	anyDown := d.isOutage(now)
 	anySuspect := d.isAnyLayerSuspect() || hasLatency
 
 	switch d.state {
@@ -358,7 +355,7 @@ func (d *Detector) transitionOnProbe(now time.Time, hasLatency bool) (*Event, *E
 
 func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
 	allUP := d.isAllLayersUP()
-	anyDown := d.isAnyLayerDown()
+	anyDown := d.isOutage(now)
 
 	if allUP {
 		d.consecAllUP++

@@ -78,6 +78,22 @@ func sendTick(d *detector.Detector, clock *MockClock, wanICMPOK, wanTCPOK, gwOK 
 		}
 	}
 
+	for _, tgt := range []struct {
+		id    int
+		layer probe.Layer
+	}{
+		{30, probe.LayerDNS}, {31, probe.LayerDNS}, {32, probe.LayerDNS},
+		{50, probe.LayerHTTP}, {51, probe.LayerHTTP}, {52, probe.LayerHTTP},
+	} {
+		_, c, cl := d.ProcessProbe(makeProbe(tgt.id, tgt.layer, wanTCPOK, clock))
+		if c != nil {
+			lastCreated = c
+		}
+		if cl != nil {
+			lastClosed = cl
+		}
+	}
+
 	cTick, clTick := d.Tick(clock.Now())
 	if cTick != nil {
 		lastCreated = cTick
@@ -240,5 +256,170 @@ func TestSuspendClosesEventAsInterrupted(t *testing.T) {
 	}
 	if (closed.Flags & detector.EventFlagInterrupted) == 0 {
 		t.Fatalf("expected EventFlagInterrupted to be set")
+	}
+}
+
+func TestSingleProviderFailureDoesNotCauseOutage(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+
+	targets := []struct {
+		id    int
+		layer probe.Layer
+	}{
+		{1, probe.LayerGateway},
+		{10, probe.LayerWANICMP},
+		{11, probe.LayerWANICMP},
+		{12, probe.LayerWANICMP},
+		{20, probe.LayerWANTCP},
+		{21, probe.LayerWANTCP},
+		{22, probe.LayerWANTCP},
+		{30, probe.LayerDNS},
+		{31, probe.LayerDNS},
+		{32, probe.LayerDNS},
+		{50, probe.LayerHTTP},
+		{51, probe.LayerHTTP},
+		{52, probe.LayerHTTP},
+	}
+
+	for _, tgt := range targets {
+		d.ProcessProbe(makeProbe(tgt.id, tgt.layer, true, clock))
+	}
+	d.Tick(clock.Now())
+
+	clock.Advance(1 * time.Second)
+	var lastCreated *detector.Event
+	for _, tgt := range targets {
+		isCloudflare := tgt.id == 10 || tgt.id == 20 || tgt.id == 30
+		ok := !isCloudflare
+		_, c, _ := d.ProcessProbe(makeProbe(tgt.id, tgt.layer, ok, clock))
+		if c != nil {
+			lastCreated = c
+		}
+	}
+	cTick, _ := d.Tick(clock.Now())
+	if cTick != nil {
+		lastCreated = cTick
+	}
+
+	if lastCreated != nil && lastCreated.Kind == detector.EventKindOutage {
+		t.Fatalf("single provider failure should not trigger an outage event")
+	}
+
+	snap := d.GetSnapshot()
+	if snap.State == detector.StateOutage {
+		t.Fatalf("state should not be Outage when other providers are responding, got %s", snap.State)
+	}
+}
+
+func TestAllUpstreamEndpointsFailCausesOutage(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+
+	targets := []struct {
+		id    int
+		layer probe.Layer
+	}{
+		{1, probe.LayerGateway},
+		{10, probe.LayerWANICMP},
+		{11, probe.LayerWANICMP},
+		{12, probe.LayerWANICMP},
+		{20, probe.LayerWANTCP},
+		{21, probe.LayerWANTCP},
+		{22, probe.LayerWANTCP},
+		{30, probe.LayerDNS},
+		{31, probe.LayerDNS},
+		{32, probe.LayerDNS},
+		{50, probe.LayerHTTP},
+		{51, probe.LayerHTTP},
+		{52, probe.LayerHTTP},
+	}
+
+	for _, tgt := range targets {
+		d.ProcessProbe(makeProbe(tgt.id, tgt.layer, true, clock))
+	}
+	d.Tick(clock.Now())
+
+	clock.Advance(1 * time.Second)
+	var lastCreated *detector.Event
+	for _, tgt := range targets {
+		ok := tgt.layer == probe.LayerGateway
+		_, c, _ := d.ProcessProbe(makeProbe(tgt.id, tgt.layer, ok, clock))
+		if c != nil {
+			lastCreated = c
+		}
+	}
+	cTick, _ := d.Tick(clock.Now())
+	if cTick != nil {
+		lastCreated = cTick
+	}
+
+	if lastCreated == nil || lastCreated.Kind != detector.EventKindOutage {
+		t.Fatalf("expected outage event when all upstream endpoints fail, got %v", lastCreated)
+	}
+
+	snap := d.GetSnapshot()
+	if snap.State != detector.StateOutage {
+		t.Fatalf("expected StateOutage when all upstream endpoints fail, got %s", snap.State)
+	}
+}
+
+func TestOutageNeedsTwoOfThreeCheckTypes(t *testing.T) {
+	cases := []struct {
+		name       string
+		failLayers map[probe.Layer]bool
+		wantOutage bool
+	}{
+		{"icmp only", map[probe.Layer]bool{probe.LayerWANICMP: true}, false},
+		{"dns only", map[probe.Layer]bool{probe.LayerDNS: true}, false},
+		{"tcp only", map[probe.Layer]bool{probe.LayerWANTCP: true}, false},
+		{"http only", map[probe.Layer]bool{probe.LayerHTTP: true}, false},
+		{"icmp and dns", map[probe.Layer]bool{probe.LayerWANICMP: true, probe.LayerDNS: true}, false},
+		{"tcp and dns", map[probe.Layer]bool{probe.LayerWANTCP: true, probe.LayerDNS: true}, true},
+		{"dns and http", map[probe.Layer]bool{probe.LayerDNS: true, probe.LayerHTTP: true}, true},
+		{"tcp and http", map[probe.Layer]bool{probe.LayerWANTCP: true, probe.LayerHTTP: true}, true},
+	}
+
+	targets := []struct {
+		id    int
+		layer probe.Layer
+	}{
+		{1, probe.LayerGateway},
+		{10, probe.LayerWANICMP}, {11, probe.LayerWANICMP}, {12, probe.LayerWANICMP},
+		{20, probe.LayerWANTCP}, {21, probe.LayerWANTCP}, {22, probe.LayerWANTCP},
+		{30, probe.LayerDNS}, {31, probe.LayerDNS}, {32, probe.LayerDNS},
+		{50, probe.LayerHTTP}, {51, probe.LayerHTTP}, {52, probe.LayerHTTP},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+			d, _ := setupDetector(clock)
+
+			for _, tgt := range targets {
+				d.ProcessProbe(makeProbe(tgt.id, tgt.layer, true, clock))
+			}
+			d.Tick(clock.Now())
+
+			clock.Advance(1 * time.Second)
+			var created *detector.Event
+			for _, tgt := range targets {
+				_, c, _ := d.ProcessProbe(makeProbe(tgt.id, tgt.layer, !tc.failLayers[tgt.layer], clock))
+				if c != nil {
+					created = c
+				}
+			}
+			if c, _ := d.Tick(clock.Now()); c != nil {
+				created = c
+			}
+
+			gotOutage := created != nil && created.Kind == detector.EventKindOutage
+			if gotOutage != tc.wantOutage {
+				t.Fatalf("outage = %v, want %v", gotOutage, tc.wantOutage)
+			}
+			if tc.wantOutage && d.GetSnapshot().State != detector.StateOutage {
+				t.Fatalf("expected StateOutage, got %s", d.GetSnapshot().State)
+			}
+		})
 	}
 }
