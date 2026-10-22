@@ -21,18 +21,16 @@ type TrayManager struct {
 	updaterMgr    *updater.Manager
 	onExit        func()
 	onPauseToggle func() bool
-	onReset       func()
 	ready         bool
 }
 
-func NewTrayManager(port func() int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool, onReset func()) *TrayManager {
+func NewTrayManager(port func() int, h *hub.Hub, updaterMgr *updater.Manager, onExit func(), onPauseToggle func() bool) *TrayManager {
 	return &TrayManager{
 		port:          port,
 		hub:           h,
 		updaterMgr:    updaterMgr,
 		onExit:        onExit,
 		onPauseToggle: onPauseToggle,
-		onReset:       onReset,
 	}
 }
 
@@ -69,28 +67,22 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 	systray.AddSeparator()
 
 	mOpen := systray.AddMenuItem("Open Dashboard", "Open browser dashboard")
-	mExportReport := systray.AddMenuItem("Export ISP Report (Last 7 Days)", "Download plain-text evidence report")
-	mExportCSV := systray.AddMenuItem("Export Outages (CSV)", "Download CSV of outages")
-	mUpdate := systray.AddMenuItem("Check for Updates...", "Check GitHub for new NetScan releases")
+	mPause := systray.AddMenuItem("Pause Monitoring", "Temporarily stop polling")
 
 	systray.AddSeparator()
 
-	mPause := systray.AddMenuItem("Pause Monitoring", "Temporarily stop polling")
-	isAuto := winapi.IsAutostartEnabled()
-	mAutostart := systray.AddMenuItemCheckbox("Start with Windows", "Run automatically at logon", isAuto)
-	if isAuto {
-		mAutostart.Check()
-	} else {
-		mAutostart.Uncheck()
-	}
+	mExport := systray.AddMenuItem("Export", "Download evidence and outage data")
+	mExportReport := mExport.AddSubMenuItem("ISP Report (Last 7 Days)", "Download plain-text evidence report")
+	mExportCSV := mExport.AddSubMenuItem("Outages (CSV)", "Download CSV of outages")
 
-	mWebUI := systray.AddMenuItemCheckbox("Enable WebUI", "Serve the browser dashboard", tm.webUIEnabled)
-	if tm.webUIEnabled {
-		mWebUI.Check()
-	} else {
-		mWebUI.Uncheck()
-	}
-	dashItems := []*systray.MenuItem{mOpen, mExportReport, mExportCSV, mUpdate}
+	mSettings := systray.AddMenuItem("Settings", "Startup, dashboard and data options")
+	isAuto := winapi.IsAutostartEnabled()
+	mAutostart := mSettings.AddSubMenuItemCheckbox("Start with Windows", "Run automatically at logon", isAuto)
+	mWebUI := mSettings.AddSubMenuItemCheckbox("Enable WebUI", "Serve the browser dashboard", tm.webUIEnabled)
+	mOpenFolder := mSettings.AddSubMenuItem("Open Data Folder", "Open logs and database location")
+
+	mUpdate := systray.AddMenuItem("Check for Updates...", "Check GitHub for new NetScan releases")
+	dashItems := []*systray.MenuItem{mOpen, mExport, mExportReport, mExportCSV, mUpdate}
 	setDashItems := func(on bool) {
 		for _, it := range dashItems {
 			if on {
@@ -101,9 +93,6 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 		}
 	}
 	setDashItems(tm.webUIEnabled)
-
-	mReset := systray.AddMenuItem("Reset Timeline History...", "Clear all timeline and probe history")
-	mOpenFolder := systray.AddMenuItem("Open Data Folder", "Open logs and database location")
 
 	systray.AddSeparator()
 
@@ -202,11 +191,6 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 					mWebUI.Uncheck()
 				}
 				setDashItems(running)
-
-			case <-mReset.ClickedCh:
-				if tm.onReset != nil {
-					tm.onReset()
-				}
 
 			case <-mOpenFolder.ClickedCh:
 				dataDir := config.DataDir()

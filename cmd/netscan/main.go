@@ -410,15 +410,6 @@ func main() {
 			sched.Pause()
 			return true
 		},
-		func() {
-			if storeWriter != nil {
-				_ = storeWriter.ResetHistory()
-			}
-			if det != nil {
-				det.Reset()
-				h.PublishSnapshot(det.GetSnapshot())
-			}
-		},
 	)
 
 	trayMgr.SetWebUI(srv.Running(), func(enable bool) (bool, error) {
