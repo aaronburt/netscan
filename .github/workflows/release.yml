@@ -1,51 +1,95 @@
 name: Release
 
+# Every merge to main ships a release:
+#   PR title "feat: ..."      -> minor bump (0.5.0 -> 0.6.0)
+#   any other PR title        -> patch bump (0.5.0 -> 0.5.1)
+# Major bumps are never automatic. Run this workflow manually with bump=major.
 on:
   push:
     branches: [main]
-  # Re-run the build for an existing release (e.g. if the release job failed
-  # after the tag was created): Actions -> Release -> Run workflow, tag "v0.5.0".
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing release tag to (re)build and upload assets for
-        required: true
+      bump:
+        description: Version bump for a manual release (use major for a major release)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      rebuild_tag:
+        description: Optional. Existing tag (e.g. v0.5.0) to rebuild and re-upload assets for, instead of cutting a new release
+        required: false
 
 permissions:
   contents: write
-  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release-please:
+  version:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
-      version: ${{ steps.rp.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      ref: ${{ steps.v.outputs.ref }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - id: rp
-        uses: googleapis/release-please-action@v4
+      - uses: actions/checkout@v4
         with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.rebuild_tag }}" ]; then
+            tag="${{ inputs.rebuild_tag }}"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          bump="${{ inputs.bump }}"
+          if [ -z "$bump" ] || [ "$bump" = "auto" ]; then
+            title=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].title // empty' || true)
+            [ -n "$title" ] || title=$(git log -1 --format=%s)
+            echo "Release title: $title"
+            # Only feat is a minor bump. Everything else, including "!" breaking
+            # markers, is a patch: majors are decided manually.
+            if echo "$title" | grep -Eiq '^feat(\([^)]*\))?!?:'; then bump=minor; else bump=patch; fi
+          fi
+
+          last=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)
+          last=${last:-v0.0.0}
+          IFS=. read -r maj min pat <<< "${last#v}"
+          case "$bump" in
+            major) maj=$((maj+1)); min=0; pat=0 ;;
+            minor) min=$((min+1)); pat=0 ;;
+            patch) pat=$((pat+1)) ;;
+          esac
+          new="$maj.$min.$pat"
+          echo "$last -> v$new ($bump)"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch'
+    needs: version
     runs-on: windows-latest
     defaults:
       run:
         shell: pwsh
     env:
-      TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
-
-      - name: Set version
-        run: '"VERSION=$($env:TAG -replace ''^v'','''')" >> $env:GITHUB_ENV'
+          ref: ${{ needs.version.outputs.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -75,11 +119,15 @@ jobs:
             Set-Content -Encoding ascii checksums.txt
           Pop-Location
 
-      - name: Upload release assets
+      # The tag and release are created only after a successful build, so a
+      # release never exists without its binaries.
+      - name: Publish release
         run: |
-          gh release upload $env:TAG `
-            dist\netscan.exe `
-            dist\netscan-windows-amd64.zip `
-            dist\netscan-installer.exe `
-            dist\updater.exe `
-            dist\checksums.txt --clobber
+          $files = "dist\netscan.exe", "dist\netscan-windows-amd64.zip", "dist\netscan-installer.exe", "dist\updater.exe", "dist\checksums.txt"
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @files --clobber
+          } else {
+            gh release create $env:TAG @files --target "${{ needs.version.outputs.ref }}" --title $env:TAG --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

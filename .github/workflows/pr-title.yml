@@ -1,0 +1,25 @@
+name: PR title
+
+# The PR title decides the release version: "feat:" is a minor bump, any other
+# type is a patch. Breaking-change markers ("!") are rejected because major
+# bumps are only made manually.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$TITLE" | grep -Eq '^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([^)]+\))?!:'; then
+            echo "::error::Breaking-change '!' is not allowed in PR titles. Major releases are made manually (Actions -> Release -> Run workflow, bump=major)."
+            exit 1
+          fi
+          if ! echo "$TITLE" | grep -Eq '^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([^)]+\))?: .+'; then
+            echo "::error::PR title must start with a type, e.g. 'fix: ...' or 'feat(ui): ...'. Types: feat (minor release); fix, perf, refactor, docs, test, build, ci, chore, style, revert (patch release)."
+            exit 1
+          fi
