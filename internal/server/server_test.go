@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -300,5 +301,45 @@ func TestTargetsEndpoint(t *testing.T) {
 		if targets[i-1].ID >= targets[i].ID {
 			t.Fatal("targets should be sorted by id")
 		}
+	}
+}
+
+func TestServerStopAndRestart(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	if !srv.Running() {
+		t.Fatal("expected server to be running after Start")
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("second Start should be a no-op, got %v", err)
+	}
+
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+	if srv.Running() {
+		t.Fatal("expected server to be stopped")
+	}
+	if _, err := os.Stat(config.PortPath()); !os.IsNotExist(err) {
+		t.Fatalf("expected port file removed after Stop, got %v", err)
+	}
+	if _, err := http.Get(baseURL + "/healthz"); err == nil {
+		t.Fatal("expected connection to fail while stopped")
+	}
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("stopping twice should be harmless, got %v", err)
+	}
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("restart failed: %v", err)
+	}
+	res, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", srv.Port()))
+	if err != nil {
+		t.Fatalf("healthz after restart: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 after restart, got %d", res.StatusCode)
 	}
 }

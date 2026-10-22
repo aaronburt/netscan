@@ -171,3 +171,30 @@ func TestCustomHTTPTargetsDoNotInheritDefaults(t *testing.T) {
 		t.Fatalf("default http targets not restored: %+v", cfg.Targets.HTTP)
 	}
 }
+
+func TestWebUIEnabledDefaultsOnAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	// A config written before the field existed keeps the dashboard on.
+	if err := os.WriteFile(path, []byte(`{"http":{"addr":"127.0.0.1","port":9100}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HTTP.Enabled || cfg.HTTP.Port != 9100 {
+		t.Fatalf("expected enabled with port 9100, got %+v", cfg.HTTP)
+	}
+
+	if err := config.SetWebUIEnabled(path, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.Enabled || cfg.HTTP.Port != 9100 {
+		t.Fatalf("expected disabled with port kept, got %+v", cfg.HTTP)
+	}
+}

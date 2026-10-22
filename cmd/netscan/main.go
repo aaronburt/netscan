@@ -261,9 +261,13 @@ func main() {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)
 	}
-	if err := srv.Start(); err != nil {
-		logger.Error("failed to start server", "error", err)
-		os.Exit(1)
+	if cfg.HTTP.Enabled {
+		if err := srv.Start(); err != nil {
+			logger.Error("failed to start server", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("web UI disabled in config, monitoring without dashboard")
 	}
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
@@ -369,10 +373,14 @@ func main() {
 		}
 	})
 
-	serverURL := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
 	if *headlessFlag {
-		fmt.Printf("NetScan %s active on %s\n", version, serverURL)
-		fmt.Printf("Dashboard & Log Viewer: %s\n", serverURL)
+		if srv.Running() {
+			serverURL := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+			fmt.Printf("NetScan %s active on %s\n", version, serverURL)
+			fmt.Printf("Dashboard & Log Viewer: %s\n", serverURL)
+		} else {
+			fmt.Printf("NetScan %s active (web UI disabled)\n", version)
+		}
 		fmt.Println("Press Ctrl+C to stop.")
 
 		sigCh := make(chan os.Signal, 1)
@@ -384,7 +392,7 @@ func main() {
 	}
 
 	trayMgr := tray.NewTrayManager(
-		srv.Port(),
+		srv.Port,
 		h,
 		updaterMgr,
 		func() {
@@ -412,6 +420,22 @@ func main() {
 			}
 		},
 	)
+
+	trayMgr.SetWebUI(srv.Running(), func(enable bool) (bool, error) {
+		if enable {
+			if err := srv.Start(); err != nil {
+				return srv.Running(), err
+			}
+		} else if err := srv.Stop(); err != nil {
+			logger.Warn("error stopping web UI", "error", err)
+		}
+		if err := config.SetWebUIEnabled(*configFlag, enable); err != nil {
+			logger.Warn("could not persist web UI setting", "error", err)
+			return srv.Running(), err
+		}
+		logger.Info("web UI toggled", "enabled", enable)
+		return srv.Running(), nil
+	})
 
 	trayMgr.Run(rootCtx)
 
