@@ -113,11 +113,18 @@ Or run the standalone updater helper in the `dist\` folder (pulls latest release
 
 ## Releases
 
-Releases are automated with [release-please](https://github.com/googleapis/release-please). Use [Conventional Commits](https://www.conventionalcommits.org/) on `main`:
+Every merged PR ships a release automatically. The PR title decides the version bump, using [Conventional Commit](https://www.conventionalcommits.org/) types:
 
-- `fix: ...` bumps the patch version (0.4.2 → 0.4.3)
-- `feat: ...` bumps the minor version (0.4.2 → 0.5.0)
-- `feat!: ...` or a `BREAKING CHANGE:` footer marks a breaking change (bumps minor while below 1.0)
-- `chore:`, `docs:`, `ci:`, `refactor:`, `test:` don't trigger a release
+- `feat: ...` bumps the minor version (0.5.0 → 0.6.0)
+- anything else (`fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`, `chore:`, `style:`, `revert:`) bumps the patch version (0.5.0 → 0.5.1)
+- `!` breaking-change markers in a title are rejected: major bumps are never automatic
 
-On each push to `main`, a release PR is kept up to date with the next version and changelog. Merging it tags the release, creates the GitHub Release, and uploads the Windows build (`netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `checksums.txt`).
+A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe` and `checksums.txt`.
+
+### Major release
+
+Go to **Actions → Release → Run workflow**, pick `main`, and set `bump` to `major` (0.5.0 → 1.0.0).
+
+### Rebuilding a release
+
+If a release run fails, run the same workflow with `rebuild_tag` set to the tag (e.g. `v0.5.1`) to rebuild and re-upload its assets.
