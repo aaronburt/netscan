@@ -145,8 +145,12 @@ type Snapshot struct {
 	FastMode      bool                        `json:"fast_mode"`
 	LayerStatuses map[probe.Layer]LayerStatus `json:"layer_statuses"`
 	LatestRTTUS   map[int]int64               `json:"latest_rtt_us"`
-	OpenEvent     *Event                      `json:"open_event,omitempty"`
-	LastEvent     *Event                      `json:"last_event,omitempty"`
+	// LastProbeMS is when each layer was last probed (send time, ms). Slow
+	// layers are only probed every few seconds, so the dashboard shows how
+	// fresh each one is.
+	LastProbeMS map[probe.Layer]int64 `json:"last_probe_ms"`
+	OpenEvent   *Event                `json:"open_event,omitempty"`
+	LastEvent   *Event                `json:"last_event,omitempty"`
 }
 
 type Clock interface {

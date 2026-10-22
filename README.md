@@ -22,6 +22,21 @@ cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netsc
 Remove-Item dist\installer-base.exe
 ```
 
+## How often it probes
+
+In normal mode NetScan makes about 3 probes a second:
+
+| Probe | Normal mode |
+|---|---|
+| Gateway ping | every second |
+| First WAN ping host (1.1.1.1) | every second |
+| Other WAN ping hosts | one every 5 s, alternating |
+| ISP hop ping | every 2 s |
+| WAN TCP, DNS | one target every 5 s, rotating |
+| HTTP | one target every 15 s, rotating |
+
+A failed probe is confirmed straight away against another target in the same layer, and anything suspicious switches to fast mode, which probes every target every 0.5 s until things settle. Those rates are the `intervals` section of `config.json` (`isp_hop_ms`, `wan_icmp_secondary_ms`, `wan_tcp_ms`, `dns_ms`, `http_ms`). Set them all to `normal_ms` to probe every layer every tick.
+
 ## Development
 
 NetScan only runs on Windows, but the core packages (probes, scheduler, detector, store, server) build and test on any OS. Windows-only code sits behind build tags with small stubs for other platforms.

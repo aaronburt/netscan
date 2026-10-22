@@ -205,17 +205,62 @@ func (d *Detector) Tick(now time.Time) (*Event, *Event) {
 	return created.Clone(), closed.Clone()
 }
 
-func (d *Detector) evaluateLayers(now time.Time) {
-	maxAge := 3 * time.Duration(d.cfg.Intervals.NormalMS) * time.Millisecond
-	if d.fastMode {
-		maxAge = 3 * time.Duration(d.cfg.Intervals.FastMS) * time.Millisecond
+// freshness is how old a result can be and still count.
+//
+// The ping layers are probed every tick, so three ticks is plenty.
+//
+// TCP, DNS and HTTP are probed less often in normal mode, and a probe that
+// fails by timing out is already as old as its timeout when it arrives
+// (results are stamped with the time they were sent). The window covers a
+// failed probe being confirmed by a second one: first probe, its timeout,
+// the confirming probe, and its timeout. It stays that wide in fast mode too,
+// so that going to fast mode on the first failure doesn't throw that failure
+// away before the confirmation arrives.
+func (d *Detector) freshness(layer probe.Layer) time.Duration {
+	var timeoutMS int
+	switch layer {
+	case probe.LayerWANTCP:
+		timeoutMS = d.cfg.TimeoutsMS.TCP
+	case probe.LayerDNS:
+		timeoutMS = d.cfg.TimeoutsMS.DNS
+	case probe.LayerHTTP:
+		timeoutMS = d.cfg.TimeoutsMS.HTTP
+	default:
+		tick := d.cfg.Intervals.NormalMS
+		if d.fastMode {
+			tick = d.cfg.Intervals.FastMS
+		}
+		return 3 * time.Duration(tick) * time.Millisecond
 	}
+	return 3*time.Duration(d.cfg.Intervals.NormalMS)*time.Millisecond + 2*time.Duration(timeoutMS)*time.Millisecond
+}
 
-	d.layerStatuses[probe.LayerGateway] = d.evalSingleTargetLayer(probe.GatewayTargetID, maxAge, now)
-	d.layerStatuses[probe.LayerISPHop] = d.evalSingleTargetLayer(probe.ISPHopTargetID, maxAge, now)
+// minEvidence is how many fresh results a layer needs before it can be
+// called down. Normal mode only probes one target of a slow layer at a time,
+// so a single failure is never enough: it makes the layer suspect, and the
+// scheduler's confirming probe settles it. A layer with only one configured
+// target can't have a second opinion.
+func (d *Detector) minEvidence(layer probe.Layer) int {
+	var configured int
+	switch layer {
+	case probe.LayerWANICMP:
+		configured = len(d.cfg.Targets.WANICMP)
+	case probe.LayerWANTCP:
+		configured = len(d.cfg.Targets.WANTCP)
+	case probe.LayerDNS:
+		configured = len(d.cfg.Targets.DNS)
+	case probe.LayerHTTP:
+		configured = len(d.cfg.Targets.HTTP)
+	}
+	return max(1, min(2, configured))
+}
+
+func (d *Detector) evaluateLayers(now time.Time) {
+	d.layerStatuses[probe.LayerGateway] = d.evalSingleTargetLayer(probe.GatewayTargetID, d.freshness(probe.LayerGateway), now)
+	d.layerStatuses[probe.LayerISPHop] = d.evalSingleTargetLayer(probe.ISPHopTargetID, d.freshness(probe.LayerISPHop), now)
 
 	for _, layer := range []probe.Layer{probe.LayerWANICMP, probe.LayerWANTCP, probe.LayerDNS, probe.LayerHTTP} {
-		d.layerStatuses[layer] = d.evalMultiTargetLayer(layer, maxAge, now)
+		d.layerStatuses[layer] = d.evalMultiTargetLayer(layer, d.freshness(layer), now)
 	}
 }
 
@@ -262,14 +307,13 @@ func (d *Detector) evalMultiTargetLayer(layer probe.Layer, maxAge time.Duration,
 	if activeCount == 0 {
 		return LayerStatusUnknown
 	}
-
-	if failCount > activeCount/2 {
+	if failCount == 0 {
+		return LayerStatusUp
+	}
+	if activeCount >= d.minEvidence(layer) && failCount > activeCount/2 {
 		return LayerStatusDown
 	}
-	if failCount > 0 {
-		return LayerStatusSuspect
-	}
-	return LayerStatusUp
+	return LayerStatusSuspect
 }
 
 func (d *Detector) isWANDown() bool {
@@ -668,6 +712,13 @@ func (d *Detector) GetSnapshot() Snapshot {
 		}
 	}
 
+	lastProbe := make(map[probe.Layer]int64)
+	for _, v := range d.latestResults {
+		if v.SendTimeUTC > lastProbe[v.Target.Layer] {
+			lastProbe[v.Target.Layer] = v.SendTimeUTC
+		}
+	}
+
 	return Snapshot{
 		TimestampMS:   d.clock.Now().UnixMilli(),
 		State:         d.state,
@@ -675,6 +726,7 @@ func (d *Detector) GetSnapshot() Snapshot {
 		FastMode:      d.fastMode,
 		LayerStatuses: layerStatusesCopy,
 		LatestRTTUS:   rttCopy,
+		LastProbeMS:   lastProbe,
 		// Copies, so callers can marshal them while the detector keeps
 		// updating its own.
 		OpenEvent: d.openEvent.Clone(),
