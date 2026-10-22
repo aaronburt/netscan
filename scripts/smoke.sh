@@ -10,9 +10,33 @@ cat > "$DATA/config.json" <<JSON
 {"http":{"addr":"127.0.0.1","port":$PORT}}
 JSON
 
+cleanup() {
+  STATUS=$?
+  set +e
+  if [ -n "${PID:-}" ]; then
+    WINPID="$(cat "/proc/$PID/winpid" 2>/dev/null)"
+    if [ -n "$WINPID" ]; then
+      taskkill //F //PID "$WINPID" > /dev/null 2>&1
+    fi
+    kill "$PID" 2>/dev/null
+    for _ in $(seq 1 20); do
+      kill -0 "$PID" 2>/dev/null || break
+      sleep 0.25
+    done
+    wait "$PID" 2>/dev/null
+  fi
+  tail -20 "$DATA/stdout.log" 2>/dev/null
+  for _ in $(seq 1 10); do
+    rm -rf "$DATA" 2>/dev/null
+    [ -d "$DATA" ] || break
+    sleep 0.5
+  done
+  exit "$STATUS"
+}
+
 "$BIN" -headless -config "$DATA/config.json" > "$DATA/stdout.log" 2>&1 &
 PID=$!
-trap 'kill "$PID" 2>/dev/null || true; cat "$DATA/stdout.log" 2>/dev/null | tail -20; rm -rf "$DATA"' EXIT
+trap cleanup EXIT
 
 BASE="http://127.0.0.1:$PORT"
 for _ in $(seq 1 40); do
