@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/aaronburt/netscan/compare/v0.5.0...v0.5.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* require 2 of 3 check types failing to confirm an outage ([cc7c5ad](https://github.com/aaronburt/netscan/commit/cc7c5ad3364911b8bca9b8c49cb7e2518d8deda7))
+* require 2 of 3 check types failing to confirm an outage ([7c4eb55](https://github.com/aaronburt/netscan/commit/7c4eb55fb4c20ef0a96e3ccaf483fe4055428439))
+
 ## [0.5.0](https://github.com/aaronburt/netscan/compare/v0.4.2...v0.5.0) (2026-10-22)
 
 

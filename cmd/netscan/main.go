@@ -28,7 +28,7 @@ import (
 	"github.com/aaronburt/netscan/internal/winapi"
 )
 
-var version = "0.5.0" // x-release-please-version
+var version = "0.5.1" // x-release-please-version
 
 func init() {
 	runtime.LockOSThread()
