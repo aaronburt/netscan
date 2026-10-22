@@ -153,11 +153,11 @@ function calcState() {
   if (backendState && backendState !== 'suspended') return backendState;
   if (!live.length) return 'healthy';
   const last = live[live.length - 1];
-  const wanDown = last.v.icmp === null && last.v.tcp === null;
+  const upstreamDown = v => [v.tcp, v.dns, v.http].filter(x => x === null).length >= 2;
   const gwDown = last.v.gw === null;
-  if (wanDown || gwDown) {
+  if (upstreamDown(last.v) || gwDown) {
     const prev = live.length > 1 ? live[live.length - 2] : null;
-    if (prev && ((prev.v.icmp === null && prev.v.tcp === null) || prev.v.gw === null)) {
+    if (prev && (upstreamDown(prev.v) || prev.v.gw === null)) {
       return 'outage';
     }
     return 'degraded';
@@ -169,7 +169,7 @@ function calcState() {
 
 function computeStats(win) {
   const now = Date.now();
-  const ev = events.filter(e => e.start > (now - win) && e.cls !== 'lat');
+  const ev = events.filter(e => e.start > (now - win) && e.cls !== 'lat' && e.raw.kind !== 'blip');
   const down = ev.reduce((a, e) => a + e.dur, 0) / 1000;
   const totalSec = win / 1000;
   const up = Math.max(0, Math.min(100, 100 * (1 - (down / totalSec))));
