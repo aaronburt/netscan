@@ -19,16 +19,6 @@ var (
 	procSendARP = iphlpapi.NewProc("SendARP")
 )
 
-type NetworkInfo struct {
-	GatewayIP       net.IP
-	GatewayMAC      string
-	LocalIP         net.IP
-	InterfaceIndex  uint32
-	InterfaceName   string
-	IsVPN           bool
-	SystemResolvers []string
-}
-
 func DiscoverNetworkInfo() (NetworkInfo, error) {
 	var size uint32 = 15000
 	var info NetworkInfo

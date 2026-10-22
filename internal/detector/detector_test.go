@@ -242,3 +242,200 @@ func TestSuspendClosesEventAsInterrupted(t *testing.T) {
 		t.Fatalf("expected EventFlagInterrupted to be set")
 	}
 }
+
+// A single failed probe used to be dropped when the detector went from
+// healthy to degraded, so a one-probe drop produced no blip event.
+func TestSingleFailedProbeRecordsBlip(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	failAt := clock.Now().UnixMilli()
+	d.ProcessProbe(makeProbe(10, probe.LayerWANICMP, false, clock))
+	if snap := d.GetSnapshot(); snap.State != detector.StateDegraded {
+		t.Fatalf("state = %s, want degraded", snap.StateString)
+	}
+
+	var created *detector.Event
+	for i := 0; i < 4 && created == nil; i++ {
+		clock.Advance(500 * time.Millisecond)
+		created, _ = sendTick(d, clock, true, true, true)
+	}
+	if created == nil || created.Kind != detector.EventKindBlip {
+		t.Fatalf("expected a blip event, got %+v", created)
+	}
+	if created.StartMS != failAt {
+		t.Fatalf("blip start = %d, want the failed probe's time %d", created.StartMS, failAt)
+	}
+}
+
+// Layer status used to be computed from a fixed list of ids, so targets
+// beyond the third in a layer were probed but ignored.
+func TestExtraTargetsCountTowardsLayer(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+
+	d.ProcessProbe(makeProbe(1000, probe.LayerDNS, false, clock))
+	d.ProcessProbe(makeProbe(1001, probe.LayerDNS, false, clock))
+	snap := d.GetSnapshot()
+	if got := snap.LayerStatuses[probe.LayerDNS]; got != detector.LayerStatusDown {
+		t.Fatalf("DNS layer = %v, want down", got)
+	}
+}
+
+// In normal mode only one target of a slow layer is probed at a time, so one
+// failure alone is not enough to call the layer down. The scheduler follows
+// it with a confirming probe of another target.
+func TestSingleFailureNeedsConfirmation(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	_, created, _ := d.ProcessProbe(makeProbe(30, probe.LayerDNS, false, clock))
+	snap := d.GetSnapshot()
+	if got := snap.LayerStatuses[probe.LayerDNS]; got != detector.LayerStatusSuspect {
+		t.Fatalf("one failed DNS probe: layer = %v, want suspect", got)
+	}
+	if created != nil || snap.OpenEvent != nil {
+		t.Fatal("one failed DNS probe must not open an outage")
+	}
+
+	// The confirming probe of another resolver fails as well.
+	clock.Advance(1200 * time.Millisecond)
+	_, created, _ = d.ProcessProbe(makeProbe(31, probe.LayerDNS, false, clock))
+	if created == nil || created.Kind != detector.EventKindOutage {
+		t.Fatalf("confirmed DNS failure should open an outage, got %+v", created)
+	}
+	// The outage starts at the first failed probe, not the confirmation.
+	if created.StartMS != clock.Now().Add(-1200*time.Millisecond).UnixMilli() {
+		t.Fatalf("outage start = %d, want the first failure's time", created.StartMS)
+	}
+}
+
+func TestFailureWithPassingConfirmationIsNotAnOutage(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	d.ProcessProbe(makeProbe(30, probe.LayerDNS, false, clock))
+	clock.Advance(200 * time.Millisecond)
+	_, created, _ := d.ProcessProbe(makeProbe(31, probe.LayerDNS, true, clock))
+	snap := d.GetSnapshot()
+	if created != nil || snap.OpenEvent != nil {
+		t.Fatal("a failure confirmed OK by another resolver is not an outage")
+	}
+}
+
+// A slow HTTP probe that fails by timing out is already as old as its
+// timeout when it arrives. It still has to count, in normal and fast mode.
+func TestHTTPTimeoutStillCounts(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	sent := clock.Now()
+	first := makeProbe(50, probe.LayerHTTP, false, clock)
+	clock.Advance(2 * time.Second) // the probe times out
+	d.ProcessProbe(first)
+
+	second := makeProbe(51, probe.LayerHTTP, false, clock)
+	clock.Advance(2 * time.Second) // so does the confirming probe
+	_, created, _ := d.ProcessProbe(second)
+	if created == nil {
+		t.Fatalf("two HTTP timeouts 2s apart should open an outage (first sent at %v)", sent)
+	}
+}
+
+// With a single configured target there's nobody to confirm against.
+func TestSingleConfiguredTargetCanGoDown(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Targets.DNS = []string{"1.1.1.1:53"}
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d := detector.NewDetector(cfg, clock, nil)
+
+	d.ProcessProbe(makeProbe(30, probe.LayerDNS, false, clock))
+	if got := d.GetSnapshot().LayerStatuses[probe.LayerDNS]; got != detector.LayerStatusDown {
+		t.Fatalf("DNS layer = %v, want down", got)
+	}
+}
+
+// Snapshots are marshalled on other goroutines, so they must not share the
+// detector's live event.
+func TestSnapshotEventsAreCopies(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+	for i := 0; i < 3; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, false, false, true)
+	}
+	snap := d.GetSnapshot()
+	if snap.OpenEvent == nil {
+		t.Fatal("expected an open outage")
+	}
+
+	for i := 0; i < 5; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, true, true, true)
+	}
+	if after := d.GetSnapshot(); after.OpenEvent != nil {
+		t.Fatal("expected the outage to be closed")
+	}
+	if snap.OpenEvent.EndMS != nil {
+		t.Fatal("closing the event changed an earlier snapshot")
+	}
+}
+
+func TestSetNextEventID(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	d.SetNextEventID(42)
+	sendTick(d, clock, true, true, true)
+	clock.Advance(time.Second)
+	sendTick(d, clock, false, false, true)
+	clock.Advance(500 * time.Millisecond)
+	created, _ := sendTick(d, clock, false, false, true)
+	if snap := d.GetSnapshot(); snap.OpenEvent != nil {
+		created = snap.OpenEvent
+	}
+	if created == nil || created.ID != 42 {
+		t.Fatalf("event = %+v, want id 42", created)
+	}
+}
+
+func TestCloseForShutdownEndsOpenEvent(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	if d.CloseForShutdown() != nil {
+		t.Fatal("nothing open, expected nil")
+	}
+	sendTick(d, clock, true, true, true)
+	for i := 0; i < 3; i++ {
+		clock.Advance(500 * time.Millisecond)
+		sendTick(d, clock, false, false, true)
+	}
+	evt := d.CloseForShutdown()
+	if evt == nil || evt.EndMS == nil || evt.Flags&detector.EventFlagInterrupted == 0 {
+		t.Fatalf("expected an interrupted, closed event, got %+v", evt)
+	}
+}
+
+func TestSnapshotReportsLastProbePerLayer(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	d.ProcessProbe(makeProbe(30, probe.LayerDNS, true, clock))
+	first := clock.Now().UnixMilli()
+	clock.Advance(3 * time.Second)
+	d.ProcessProbe(makeProbe(1, probe.LayerGateway, true, clock))
+
+	snap := d.GetSnapshot()
+	if snap.LastProbeMS[probe.LayerDNS] != first {
+		t.Fatalf("DNS last probe = %d, want %d", snap.LastProbeMS[probe.LayerDNS], first)
+	}
+	if snap.LastProbeMS[probe.LayerGateway] != clock.Now().UnixMilli() {
+		t.Fatalf("gateway last probe = %d", snap.LastProbeMS[probe.LayerGateway])
+	}
+}

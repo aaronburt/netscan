@@ -17,13 +17,17 @@ type Scheduler struct {
 	fastMode   atomic.Bool
 	paused     atomic.Bool
 	seq        atomic.Uint64
+	dropped    atomic.Int64
 	inFlight   map[int]*atomic.Int32
 	flightLock sync.Mutex
 	version    string
 
+	// Only touched by the Run goroutine (through planTick).
+	ticks   int64
 	tcpIdx  int
 	dnsIdx  int
 	httpIdx int
+	secIdx  int
 
 	onGap func(gapDuration time.Duration)
 }
@@ -70,10 +74,58 @@ func (s *Scheduler) getInFlightCounter(targetID int) *atomic.Int32 {
 	return ctr
 }
 
+// gapSlack is how much later than expected a tick can run before we treat
+// the delay as the machine having slept.
+const gapSlack = 3 * time.Second
+
+// pacer keeps ticks on a fixed grid so probes don't drift, and spots
+// wall-clock gaps such as a suspend. The grid restarts whenever the interval
+// changes or monitoring resumes from a pause.
+type pacer struct {
+	start    time.Time
+	lastTick time.Time
+	tick     int64
+	interval time.Duration
+	synced   bool
+}
+
+// reset makes the next step start a fresh grid without reporting a gap.
+func (p *pacer) reset() {
+	p.synced = false
+}
+
+// step is called once per tick. It returns how long to wait before the next
+// tick and, if this tick came much later than expected, how long the gap was.
+func (p *pacer) step(now time.Time, interval time.Duration) (wait, gap time.Duration) {
+	if p.synced {
+		expected := max(interval, p.interval)
+		if d := now.Sub(p.lastTick); d > expected+gapSlack {
+			gap = d
+			p.synced = false
+		} else if interval != p.interval {
+			p.synced = false
+		}
+	}
+	if !p.synced {
+		p.start = now
+		p.tick = 0
+		p.interval = interval
+		p.synced = true
+	}
+	p.lastTick = now
+
+	p.tick++
+	next := p.start.Add(time.Duration(p.tick) * interval)
+	if now.Sub(next) > interval {
+		// We fell behind; skip the ticks we missed instead of bursting.
+		p.tick = int64(now.Sub(p.start)/interval) + 1
+		next = p.start.Add(time.Duration(p.tick) * interval)
+	}
+	return next.Sub(now), gap
+}
+
 func (s *Scheduler) Run(ctx context.Context) error {
-	start := time.Now()
-	tickCount := int64(0)
-	lastWall := start
+	var p pacer
 
 	for {
 		select {
@@ -83,6 +135,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 
 		if s.paused.Load() {
+			// Time spent paused is not a gap.
+			p.reset()
 			select {
 			case <-ctx.Done():
 				return nil
@@ -98,130 +152,172 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		interval := time.Duration(intervalMS) * time.Millisecond
 
-		tickCount++
-		nextDeadline := start.Add(time.Duration(tickCount) * interval)
-		now := time.Now()
-
-		wallDiff := now.Sub(lastWall)
-		lastWall = now
-		if wallDiff > interval+3*time.Second {
-			if s.onGap != nil {
-				s.onGap(wallDiff)
-			}
-			start = now
-			tickCount = 0
-			nextDeadline = start.Add(interval)
-		} else if now.After(nextDeadline.Add(interval)) {
-			missedTicks := int64(now.Sub(start) / interval)
-			tickCount = missedTicks
-			nextDeadline = start.Add(time.Duration(tickCount) * interval)
+		wait, gap := p.step(time.Now(), interval)
+		if gap > 0 && s.onGap != nil {
+			s.onGap(gap)
 		}
 
-		s.dispatchTick(ctx, isFast, interval, tickCount)
+		s.dispatchTick(ctx, isFast, interval)
 
-		sleepDur := time.Until(nextDeadline)
-		if sleepDur > 0 {
+		if wait > 0 {
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(sleepDur):
+			case <-time.After(wait):
 			}
 		}
 	}
 }
 
-func (s *Scheduler) dispatchTick(ctx context.Context, isFast bool, interval time.Duration, tickNum int64) {
+// tickPlan is what one tick will probe, per layer.
+type tickPlan struct {
+	icmp, dns, tcp, http []probe.Target
+}
+
+// everyN converts a period into a number of ticks (at least 1).
+func everyN(periodMS int, interval time.Duration) int64 {
+	n := (time.Duration(periodMS)*time.Millisecond + interval/2) / interval
+	if n < 1 {
+		n = 1
+	}
+	return int64(n)
+}
+
+// planTick decides what to probe this tick.
+//
+// Fast mode probes every target, so a problem is confirmed quickly. Normal
+// mode keeps the gateway and the first WAN ping host on every tick (they
+// catch short drops) and runs each other layer on its own, slower period,
+// one rotating target at a time. A failed probe is confirmed against another
+// target straight away (see run), so the slower rates don't delay detection.
+func (s *Scheduler) planTick(isFast bool, interval time.Duration) tickPlan {
+	tick := s.ticks
+	s.ticks++
+	iv := s.cfg.Intervals
+	due := func(periodMS int) bool { return tick%everyN(periodMS, interval) == 0 }
+
+	var plan tickPlan
+	wanICMP := s.registry.GetWANICMP()
+	if gw := s.registry.GetGateway(); gw != nil {
+		plan.icmp = append(plan.icmp, *gw)
+	}
+
+	if isFast {
+		if isp := s.registry.GetISPHop(); isp != nil {
+			plan.icmp = append(plan.icmp, *isp)
+		}
+		plan.icmp = append(plan.icmp, wanICMP...)
+		plan.dns = s.registry.GetDNS()
+		plan.tcp = s.registry.GetWANTCP()
+		if tick%2 == 0 {
+			plan.http = s.registry.GetHTTP()
+		}
+		return plan
+	}
+
+	if isp := s.registry.GetISPHop(); isp != nil && due(iv.ISPHopMS) {
+		plan.icmp = append(plan.icmp, *isp)
+	}
+	if len(wanICMP) > 0 {
+		plan.icmp = append(plan.icmp, wanICMP[0])
+		if due(iv.WANICMPSecondaryMS) {
+			plan.icmp = append(plan.icmp, pickNext(wanICMP[1:], &s.secIdx)...)
+		}
+	}
+	if due(iv.DNSMS) {
+		plan.dns = pickNext(s.registry.GetDNS(), &s.dnsIdx)
+	}
+	if due(iv.WANTCPMS) {
+		plan.tcp = pickNext(s.registry.GetWANTCP(), &s.tcpIdx)
+	}
+	if due(iv.HTTPMS) {
+		plan.http = pickNext(s.registry.GetHTTP(), &s.httpIdx)
+	}
+	return plan
+}
+
+// pickNext returns the next target in turn, or nothing for an empty list.
+func pickNext(all []probe.Target, idx *int) []probe.Target {
+	if len(all) == 0 {
+		return nil
+	}
+	t := all[*idx%len(all)]
+	*idx++
+	return []probe.Target{t}
+}
+
+func (s *Scheduler) dispatchTick(ctx context.Context, isFast bool, interval time.Duration) {
+	plan := s.planTick(isFast, interval)
 	staggerStep := interval / 4
 
-	icmpTargets := make([]probe.Target, 0)
-	gw := s.registry.GetGateway()
-	if gw != nil {
-		icmpTargets = append(icmpTargets, *gw)
+	s.launchBatch(ctx, plan.icmp, isFast)
+	s.launchAfter(ctx, staggerStep, plan.dns, isFast)
+	s.launchAfter(ctx, 2*staggerStep, plan.tcp, isFast)
+	s.launchAfter(ctx, 3*staggerStep, plan.http, isFast)
+}
+
+func (s *Scheduler) launchAfter(ctx context.Context, delay time.Duration, targets []probe.Target, isFast bool) {
+	if len(targets) == 0 {
+		return
 	}
-	isp := s.registry.GetISPHop()
-	if isp != nil {
-		icmpTargets = append(icmpTargets, *isp)
-	}
-	icmpTargets = append(icmpTargets, s.registry.GetWANICMP()...)
-
-	s.launchBatch(ctx, icmpTargets, s.runICMP, isFast)
-
 	go func() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(staggerStep):
+		case <-time.After(delay):
 		}
-
-		allDNS := s.registry.GetDNS()
-		if len(allDNS) > 0 {
-			if isFast {
-				s.launchBatch(ctx, allDNS, s.runDNS, isFast)
-			} else {
-				idx := s.dnsIdx % len(allDNS)
-				s.dnsIdx++
-				s.launchBatch(ctx, []probe.Target{allDNS[idx]}, s.runDNS, isFast)
-			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * staggerStep):
-		}
-
-		allTCP := s.registry.GetWANTCP()
-		if len(allTCP) > 0 {
-			if isFast {
-				s.launchBatch(ctx, allTCP, s.runTCP, isFast)
-			} else {
-				idx := s.tcpIdx % len(allTCP)
-				s.tcpIdx++
-				s.launchBatch(ctx, []probe.Target{allTCP[idx]}, s.runTCP, isFast)
-			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(3 * staggerStep):
-		}
-
-		allHTTP := s.registry.GetHTTP()
-		if len(allHTTP) > 0 {
-			if isFast {
-				if tickNum%2 == 0 {
-					s.launchBatch(ctx, allHTTP, s.runHTTP, isFast)
-				}
-			} else {
-				idx := s.httpIdx % len(allHTTP)
-				s.httpIdx++
-				s.launchBatch(ctx, []probe.Target{allHTTP[idx]}, s.runHTTP, isFast)
-			}
-		}
+		s.launchBatch(ctx, targets, isFast)
 	}()
 }
 
-func (s *Scheduler) launchBatch(ctx context.Context, targets []probe.Target, fn func(context.Context, probe.Target, bool), isFast bool) {
+func (s *Scheduler) launchBatch(ctx context.Context, targets []probe.Target, isFast bool) {
 	for _, t := range targets {
-		target := t
-		ctr := s.getInFlightCounter(target.ID)
-		cur := ctr.Add(1)
-		if cur > 3 {
-			ctr.Add(-1)
-			s.emitSkipped(target, isFast)
-			continue
+		if !s.launch(ctx, t, isFast, false) {
+			s.emitSkipped(t, isFast)
 		}
-
-		go func() {
-			defer ctr.Add(-1)
-			fn(ctx, target, isFast)
-		}()
 	}
+}
+
+// launch starts a probe unless that target already has too many in flight.
+func (s *Scheduler) launch(ctx context.Context, target probe.Target, isFast, confirming bool) bool {
+	ctr := s.getInFlightCounter(target.ID)
+	if ctr.Add(1) > 3 {
+		ctr.Add(-1)
+		return false
+	}
+	go func() {
+		defer ctr.Add(-1)
+		s.run(ctx, target, isFast, confirming)
+	}()
+	return true
+}
+
+// layerTargets returns the configured targets of a layer that can be
+// confirmed against each other.
+func (s *Scheduler) layerTargets(layer probe.Layer) []probe.Target {
+	switch layer {
+	case probe.LayerWANICMP:
+		return s.registry.GetWANICMP()
+	case probe.LayerWANTCP:
+		return s.registry.GetWANTCP()
+	case probe.LayerDNS:
+		return s.registry.GetDNS()
+	case probe.LayerHTTP:
+		return s.registry.GetHTTP()
+	}
+	return nil
+}
+
+// confirmTarget picks another target in the same layer to double-check a
+// failure, or false when the layer has no other target.
+func (s *Scheduler) confirmTarget(failed probe.Target) (probe.Target, bool) {
+	all := s.layerTargets(failed.Layer)
+	for i, t := range all {
+		if t.ID == failed.ID && len(all) > 1 {
+			return all[(i+1)%len(all)], true
+		}
+	}
+	return probe.Target{}, false
 }
 
 func (s *Scheduler) emitSkipped(t probe.Target, isFast bool) {
@@ -244,50 +340,48 @@ func (s *Scheduler) emitSkipped(t probe.Target, isFast bool) {
 	s.sendResult(res)
 }
 
-func (s *Scheduler) runICMP(_ context.Context, t probe.Target, isFast bool) {
+// run probes one target and reports the result. In normal mode a failure
+// is followed straight away by one probe of another target in the same
+// layer, so one failed probe is never the only evidence; the detector waits
+// for that second result before calling the layer down.
+func (s *Scheduler) run(ctx context.Context, t probe.Target, isFast, confirming bool) {
 	seq := s.seq.Add(1)
-	timeout := time.Duration(s.cfg.TimeoutsMS.ICMP) * time.Millisecond
-	res := probe.ProbeICMP(t, timeout, seq)
+	var res probe.ProbeResult
+	switch t.Layer {
+	case probe.LayerGateway, probe.LayerISPHop, probe.LayerWANICMP:
+		res = probe.ProbeICMP(t, time.Duration(s.cfg.TimeoutsMS.ICMP)*time.Millisecond, seq)
+	case probe.LayerWANTCP:
+		res = probe.ProbeTCP(t, time.Duration(s.cfg.TimeoutsMS.TCP)*time.Millisecond, seq)
+	case probe.LayerDNS:
+		res = probe.ProbeDNS(t, s.registry.GetDNSQueryName(), time.Duration(s.cfg.TimeoutsMS.DNS)*time.Millisecond, seq)
+	case probe.LayerHTTP:
+		res = probe.ProbeHTTP(t, time.Duration(s.cfg.TimeoutsMS.HTTP)*time.Millisecond, seq, s.version)
+	default:
+		return
+	}
 	if isFast {
 		res.Flags |= probe.FlagFastMode
 	}
 	s.sendResult(res)
-}
 
-func (s *Scheduler) runTCP(_ context.Context, t probe.Target, isFast bool) {
-	seq := s.seq.Add(1)
-	timeout := time.Duration(s.cfg.TimeoutsMS.TCP) * time.Millisecond
-	res := probe.ProbeTCP(t, timeout, seq)
-	if isFast {
-		res.Flags |= probe.FlagFastMode
+	if res.OK || isFast || confirming || ctx.Err() != nil {
+		return
 	}
-	s.sendResult(res)
-}
-
-func (s *Scheduler) runDNS(_ context.Context, t probe.Target, isFast bool) {
-	seq := s.seq.Add(1)
-	timeout := time.Duration(s.cfg.TimeoutsMS.DNS) * time.Millisecond
-	queryName := s.registry.GetDNSQueryName()
-	res := probe.ProbeDNS(t, queryName, timeout, seq)
-	if isFast {
-		res.Flags |= probe.FlagFastMode
+	if other, ok := s.confirmTarget(t); ok {
+		s.launch(ctx, other, false, true)
 	}
-	s.sendResult(res)
-}
-
-func (s *Scheduler) runHTTP(_ context.Context, t probe.Target, isFast bool) {
-	seq := s.seq.Add(1)
-	timeout := time.Duration(s.cfg.TimeoutsMS.HTTP) * time.Millisecond
-	res := probe.ProbeHTTP(t, timeout, seq, s.version)
-	if isFast {
-		res.Flags |= probe.FlagFastMode
-	}
-	s.sendResult(res)
 }
 
 func (s *Scheduler) sendResult(res probe.ProbeResult) {
 	select {
 	case s.outCh <- res:
 	default:
+		s.dropped.Add(1)
 	}
+}
+
+// DroppedResults is how many probe results were thrown away because the
+// processor couldn't keep up.
+func (s *Scheduler) DroppedResults() int64 {
+	return s.dropped.Load()
 }

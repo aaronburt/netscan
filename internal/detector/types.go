@@ -118,6 +118,26 @@ type Event struct {
 	ContextJSON    string         `json:"context,omitempty"`
 }
 
+// Clone returns a deep copy of e, or nil when e is nil.
+func (e *Event) Clone() *Event {
+	if e == nil {
+		return nil
+	}
+	c := *e
+	c.EndMS = clonePtr(e.EndMS)
+	c.EndUncertMS = clonePtr(e.EndUncertMS)
+	c.DurationMS = clonePtr(e.DurationMS)
+	return &c
+}
+
+func clonePtr(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 type Snapshot struct {
 	TimestampMS   int64                       `json:"ts_ms"`
 	State         State                       `json:"state"`
@@ -125,8 +145,12 @@ type Snapshot struct {
 	FastMode      bool                        `json:"fast_mode"`
 	LayerStatuses map[probe.Layer]LayerStatus `json:"layer_statuses"`
 	LatestRTTUS   map[int]int64               `json:"latest_rtt_us"`
-	OpenEvent     *Event                      `json:"open_event,omitempty"`
-	LastEvent     *Event                      `json:"last_event,omitempty"`
+	// LastProbeMS is when each layer was last probed (send time, ms). Slow
+	// layers are only probed every few seconds, so the dashboard shows how
+	// fresh each one is.
+	LastProbeMS map[probe.Layer]int64 `json:"last_probe_ms"`
+	OpenEvent   *Event                `json:"open_event,omitempty"`
+	LastEvent   *Event                `json:"last_event,omitempty"`
 }
 
 type Clock interface {

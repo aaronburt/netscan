@@ -1,12 +1,55 @@
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
 
 const SER = [
-  { id: 'gw', name: 'Gateway', short: 'GW', targetId: 1, target: '192.168.1.1' },
+  { id: 'gw', name: 'Gateway', short: 'GW', targetId: 1, target: 'detecting...' },
   { id: 'icmp', name: 'WAN ICMP', short: 'ICMP', targetId: 10, target: '1.1.1.1' },
-  { id: 'tcp', name: 'WAN TCP', short: 'TCP', targetId: 20, target: '1.1.1.1:443' },
-  { id: 'dns', name: 'DNS', short: 'DNS', targetId: 30, target: '1.1.1.1:53' },
-  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 50, target: 'cp.cloudflare.com' }
+  { id: 'tcp', name: 'WAN TCP', short: 'TCP', targetId: 20, target: '1.1.1.1:443', slow: true },
+  { id: 'dns', name: 'DNS', short: 'DNS', targetId: 30, target: '1.1.1.1:53', slow: true },
+  { id: 'http', name: 'HTTP 204', short: 'HTTP', targetId: 50, target: 'connectivitycheck.gstatic.com', slow: true }
 ];
+
+// Which chart series each backend layer belongs to. The ISP hop isn't charted.
+const LAYER_SER = { gateway: 'gw', wan_icmp: 'icmp', wan_tcp: 'tcp', dns: 'dns', http: 'http' };
+
+// Target id -> series id, filled from /api/targets. Until that loads, fall
+// back to the default id ranges.
+let TARGET_SER = {};
+
+// When each series was last probed (ms), from the snapshot. TCP, DNS and HTTP
+// are only checked every few seconds in normal mode, so their tiles show
+// how fresh the result is instead of a per-second history.
+let lastProbeMS = {};
+
+function serForTargetId(id) {
+  id = +id;
+  if (TARGET_SER[id]) return TARGET_SER[id];
+  if (id === 1) return 'gw';
+  if (id >= 10 && id < 20) return 'icmp';
+  if (id >= 20 && id < 30) return 'tcp';
+  if (id >= 30 && id < 50) return 'dns';
+  if (id >= 50 && id < 60) return 'http';
+  return null;
+}
+
+function serForSample(sm) {
+  return LAYER_SER[sm.layer] || serForTargetId(sm.target_id);
+}
+
+// esc makes text from the backend (error strings, labels, addresses) safe to
+// put inside innerHTML.
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Bits of an event's layers_down, matching detector.LayerMask*.
+const LAYER_MASK_SER = [[1 << 1, 'gw'], [1 << 3, 'icmp'], [1 << 4, 'tcp'], [1 << 5, 'dns'], [1 << 6, 'http']];
+
+function failedLayers(mask) {
+  return LAYER_MASK_SER.filter(([bit]) => (mask & bit) !== 0).map(([, sid]) => sid);
+}
+
+const FLAG_LATENCY = 1 << 1;
+const FLAG_SPIKE = 1 << 2;
 
 const BYID = {};
 SER.forEach(s => { BYID[s.id] = s; });
@@ -19,15 +62,6 @@ const CLS = {
   lat: { label: 'High latency', sev: 'warn', fail: [], gw: true }
 };
 
-const ERR = {
-  gw: 'no echo reply (1000 ms)',
-  icmp: 'request timed out (1000 ms)',
-  tcp: 'dial tcp: i/o timeout (1200 ms)',
-  dns: 'no response from 1.1.1.1:53 (1200 ms)',
-  http: 'context deadline exceeded (2000 ms)'
-};
-
-const STAGGER = { gw: 0, icmp: 0, dns: 250, tcp: 500, http: 750 };
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const RANGE = { '15m': 9e5, '1h': 36e5, '24h': 864e5, '7d': 6048e5 };
@@ -53,7 +87,7 @@ let events = [];
 let failedSamples = [];
 let hover = null;
 let paused = false;
-let currentGatewayIP = '192.168.1.1';
+let currentGatewayIP = '';
 let currentInterface = 'Ethernet';
 
 const F = { mode: 'out', proto: 'all', cls: 'all', range: '7d', limit: 10 };
@@ -107,7 +141,9 @@ function normalizeEvent(e) {
     start: e.start_ms,
     dur: Math.max(100, dur),
     cls: cls,
-    gwRtt: e.gateway_ok_pct != null && e.gateway_ok_pct > 0 ? 1.8 : 0,
+    fail: failedLayers(e.layers_down || 0),
+    gwPct: e.gateway_ok_pct != null ? e.gateway_ok_pct : null,
+    gwRtt: null,
     raw: e
   };
 }
@@ -117,16 +153,16 @@ function calcState() {
   if (backendState && backendState !== 'suspended') return backendState;
   if (!live.length) return 'healthy';
   const last = live[live.length - 1];
-  const wanDown = last.v.icmp == null && last.v.tcp == null;
-  const gwDown = last.v.gw == null;
+  const wanDown = last.v.icmp === null && last.v.tcp === null;
+  const gwDown = last.v.gw === null;
   if (wanDown || gwDown) {
     const prev = live.length > 1 ? live[live.length - 2] : null;
-    if (prev && ((prev.v.icmp == null && prev.v.tcp == null) || prev.v.gw == null)) {
+    if (prev && ((prev.v.icmp === null && prev.v.tcp === null) || prev.v.gw === null)) {
       return 'outage';
     }
     return 'degraded';
   }
-  const anyBad = SER.some(s => last.v[s.id] == null);
+  const anyBad = SER.some(s => last.v[s.id] === null);
   if (anyBad) return 'degraded';
   return 'healthy';
 }
@@ -204,23 +240,27 @@ function renderTiles() {
     const last = vals.length ? vals[vals.length - 1] : null;
     const ok = vals.filter(v => v != null);
     const avg = ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : 0;
-    const loss = vals.length ? 100 * (vals.length - ok.length) / vals.length : 0;
+    const seen = vals.filter(v => v !== undefined);
+    const loss = seen.length ? 100 * (seen.length - ok.length) / seen.length : 0;
     const mx = Math.max.apply(null, ok.concat([10]));
     const W = 200;
     const H = 32;
     const x = i => 2 + i * (W - 8) / Math.max(1, vals.length - 1);
     const y = v => H - 3 - (v / mx) * (H - 8);
     const d = pathD(vals, x, y);
-    const fails = vals.map((v, i) => v == null ? '<line class="fail-tick" x1="' + x(i).toFixed(1) + '" x2="' + x(i).toFixed(1) + '" y1="' + (H - 8) + '" y2="' + (H - 1) + '"/>' : '').join('');
+    const fails = vals.map((v, i) => v === null ? '<line class="fail-tick" x1="' + x(i).toFixed(1) + '" x2="' + x(i).toFixed(1) + '" y1="' + (H - 8) + '" y2="' + (H - 1) + '"/>' : '').join('');
     const lastOk = last != null;
+    const noData = last === undefined;
     const ex = x(vals.length - 1);
     const spark = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true"><path class="ln" style="stroke-width:1.6" d="' + d + '" vector-effect="non-scaling-stroke"/>' + fails + (lastOk ? '<circle class="dot" cx="' + ex.toFixed(1) + '" cy="' + y(last).toFixed(1) + '" r="3"/>' : '') + '</svg>';
 
     return '<div class="tile card c-' + s.id + '"><div class="tile-h"><span class="tile-n"><i class="sw"></i>' + s.name + '</span>' +
-      (lastOk ? '<span class="pill good">' + ICO.check + 'OK</span>' : '<span class="pill bad">' + ICO.x + 'Timeout</span>') + '</div>' +
-      '<div class="tile-t">' + s.target + '</div>' +
-      '<div class="tile-v">' + (lastOk ? '<b>' + last.toFixed(1) + '</b><span>ms</span>' : '<b class="bad">no answer</b>') + '</div>' + spark +
-      '<div class="tile-f"><span>60 s avg <b>' + avg.toFixed(1) + ' ms</b></span><span>loss <b>' + loss.toFixed(1) + '%</b></span></div></div>';
+      (lastOk ? '<span class="pill good">' + ICO.check + 'OK</span>' : noData ? '<span class="pill">Waiting</span>' : '<span class="pill bad">' + ICO.x + 'Timeout</span>') + '</div>' +
+      '<div class="tile-t">' + esc(s.target) + '</div>' +
+      '<div class="tile-v">' + (lastOk ? '<b>' + last.toFixed(1) + '</b><span>ms</span>' : noData ? '<b>waiting</b>' : '<b class="bad">no answer</b>') + '</div>' + spark +
+      (s.slow
+        ? '<div class="tile-f"><span>checked <b>' + (lastProbeMS[s.id] ? fmtAgo(Date.now() - lastProbeMS[s.id]) + ' ago' : 'n/a') + '</b></span><span>rotates targets</span></div></div>'
+        : '<div class="tile-f"><span>60 s avg <b>' + avg.toFixed(1) + ' ms</b></span><span>loss <b>' + loss.toFixed(1) + '%</b></span></div></div>');
   }).join('');
 }
 
@@ -256,7 +296,7 @@ function renderChart() {
   });
   g += '<text x="' + (CL - 8) + '" y="' + (CH - 8) + '" text-anchor="end" style="font-size:10px">ms</text>';
 
-  const wan = live.map(p => p.v.icmp == null && p.v.tcp == null);
+  const wan = live.map(p => p.v.icmp === null && p.v.tcp === null);
   let bands = '';
   const inWan = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -283,7 +323,7 @@ function renderChart() {
   for (let i = 0; i < n; i++) {
     if (!inWan[i]) {
       SER.forEach((s, k) => {
-        if (live[i].v[s.id] == null) {
+        if (live[i].v[s.id] === null) {
           ticks += '<line class="fail-tick" x1="' + (cx(i) + (k - 2) * 2.5).toFixed(1) + '" x2="' + (cx(i) + (k - 2) * 2.5).toFixed(1) + '" y1="' + (CH - CB - 9) + '" y2="' + (CH - CB - 1) + '"/>';
         }
       });
@@ -296,7 +336,7 @@ function renderChart() {
   const p = live[hover != null ? hover : n - 1];
   $('legend').innerHTML = SER.map(s => {
     const v = p.v[s.id];
-    return '<span class="c-' + s.id + '"><i></i>' + s.name + ' <b>' + (v == null ? 'timeout' : v.toFixed(1) + ' ms') + '</b></span>';
+    return '<span class="c-' + s.id + '"><i></i>' + s.name + ' <b>' + (v === undefined ? 'waiting' : v === null ? 'timeout' : v.toFixed(1) + ' ms') + '</b></span>';
   }).join('') + '<span class="at">' + (hover != null ? fmtT(p.ts, true) : 'live') + '</span>';
 }
 
@@ -407,7 +447,7 @@ function filteredEvents() {
   const w = RANGE[F.range] || RANGE['7d'];
   return events.filter(e => {
     if (now - e.start > w) return false;
-    if (F.proto !== 'all' && !(CLS[e.cls].fail.includes(F.proto))) return false;
+    if (F.proto !== 'all' && !e.fail.includes(F.proto)) return false;
     if (F.cls !== 'all' && e.cls !== F.cls) return false;
     return true;
   });
@@ -447,11 +487,11 @@ function renderLog() {
         const c = CLS[e.cls] || CLS.wan;
         return '<tr data-id="' + e.id + '"><td><button class="rowbtn" type="button" data-id="' + e.id + '">' + fmtD(e.start) + ' ' + fmtT(e.start) + '</button></td><td class="mono">' + fmtDur(e.dur) + '</td>' +
           '<td><span class="pill ' + c.sev + '">' + (c.sev === 'bad' ? ICO.x : ICO.warn) + c.label + '</span></td>' +
-          '<td>' + (c.gw ? '<span class="gwc ok">' + ICO.check + '<span class="mono">' + e.gwRtt.toFixed(1) + ' ms</span></span>' : '<span class="gwc no">' + ICO.x + 'No reply</span>') + '</td>' +
-          '<td>' + (c.fail.length ? '<div class="chips">' + c.fail.map(chip).join('') + '</div>' : '<span class="muted">All answered, RTT above 400 ms</span>') + '</td></tr>';
+          '<td>' + (e.gwPct > 0 ? '<span class="gwc ok">' + ICO.check + '<span class="mono">' + Math.round(e.gwPct) + '% answered</span></span>' : '<span class="gwc no">' + ICO.x + 'No reply</span>') + '</td>' +
+          '<td>' + (e.fail.length ? '<div class="chips">' + e.fail.map(chip).join('') + '</div>' : '<span class="muted">' + (e.cls === 'lat' ? 'All answered, RTT above 400 ms' : 'Short drop, no layer fully down') + '</span>') + '</td></tr>';
       }
       const c2 = CLS[e.cls] || CLS.wan;
-      return '<tr data-id="' + (e.oid || '') + '"><td><button class="rowbtn" type="button" data-id="' + (e.oid || '') + '">' + fmtD(e.ts) + ' ' + fmtT(e.ts, true) + '</button></td><td>' + chip(e.proto) + '</td><td class="mono">' + (BYID[e.proto]?.target || '') + '</td><td class="mono">' + e.err + '</td><td><span class="pill ' + c2.sev + '">' + c2.label + '</span></td></tr>';
+      return '<tr data-id="' + (e.oid || '') + '"><td><button class="rowbtn" type="button" data-id="' + (e.oid || '') + '">' + fmtD(e.ts) + ' ' + fmtT(e.ts, true) + '</button></td><td>' + chip(e.proto) + '</td><td class="mono">' + esc(e.target || BYID[e.proto]?.target || '') + '</td><td class="mono">' + esc(e.err) + '</td><td><span class="pill ' + c2.sev + '">' + c2.label + '</span></td></tr>';
     }).join('');
   }
 
@@ -482,7 +522,7 @@ async function openDrawer(id) {
     const samples = detail.samples || [];
 
     const norm = normalizeEvent(ev);
-    const gwSample = samples.find(sm => (sm.target_id === 1 || sm.layer === 'gw') && sm.ok);
+    const gwSample = samples.find(sm => serForSample(sm) === 'gw' && sm.ok);
     if (gwSample && gwSample.rtt_us > 0) {
       norm.gwRtt = +(gwSample.rtt_us / 1000).toFixed(1);
     }
@@ -500,7 +540,23 @@ async function openDrawer(id) {
       ? ['warn', ICO.warn, 'Every probe got an answer, but round trips stayed above 400 ms.']
       : norm.cls === 'http'
       ? ['good', ICO.check, 'The network and DNS stayed up. Only the HTTP check failed, which points to a stalled web connection or captive portal.']
-      : ['good', ICO.check, 'Your router answered all probes in ' + norm.gwRtt.toFixed(1) + ' ms while the internet did not, so the fault sat upstream, at the modem or your ISP.'];
+      : norm.gwRtt != null || norm.gwPct > 0
+      ? ['good', ICO.check, 'Your router kept answering' + (norm.gwRtt != null ? ' (' + norm.gwRtt.toFixed(1) + ' ms)' : '') + ' while the internet did not, so the fault sat upstream, at the modem or your ISP.']
+      : ['warn', ICO.warn, 'Internet probes failed, but there are no router replies on record for this drop, so NetScan can\'t tell whether the fault was inside your network or upstream.'];
+
+    const routerText = norm.gwRtt != null
+      ? norm.gwRtt.toFixed(1) + ' ms'
+      : norm.gwPct > 0 ? Math.round(norm.gwPct) + '% answered' : 'no reply';
+    const kv = '<dl class="kv"><div><dt>Length</dt><dd>' + fmtDur(norm.dur) + '</dd></div><div><dt>Router</dt><dd>' + routerText + '</dd></div><div><dt>Samples</dt><dd>' + samples.length + '</dd></div></dl>';
+    const proofHTML = '<div class="proof ' + proof[0] + '">' + proof[1].replace('<svg', '<svg width="16" height="16"') + '<span>' + proof[2] + '</span></div>';
+
+    if (!samples.length) {
+      // Raw samples age out after a while. Say so rather than drawing a
+      // made-up timeline.
+      $('dr-body').innerHTML = proofHTML + kv +
+        '<div class="empty">No probe samples are stored for this drop any more, so there is no per-probe timeline to show.</div>';
+      return;
+    }
 
     const W = 640;
     const L = 86;
@@ -521,52 +577,44 @@ async function openDrawer(id) {
 
     SER.forEach((sr, k) => {
       const cy0 = T + k * LH + LH / 2;
-      const failing = c.fail.includes(sr.id);
-      const slow = norm.cls === 'lat' && sr.id !== 'gw';
       s += '<text x="' + (L - 10) + '" y="' + (cy0 + 4) + '" text-anchor="end" style="fill:var(--ink-2)">' + sr.name + '</text><g class="c-' + sr.id + '">';
 
-      for (let t = t0 + STAGGER[sr.id]; t < t1;) {
-        const inside = t >= norm.start && t < end;
-        const px = x(t).toFixed(1);
-        if (inside && failing) {
+      samples.forEach(sm => {
+        if (serForSample(sm) !== sr.id || sm.ts_ms < t0 || sm.ts_ms > t1) return;
+        const px = x(sm.ts_ms).toFixed(1);
+        if (!sm.ok) {
           s += '<path d="M' + (px - 3) + ' ' + (cy0 - 3) + 'l6 6M' + (+px + 3) + ' ' + (cy0 - 3) + 'l-6 6" stroke="var(--bad)" stroke-width="1.8" stroke-linecap="round"/>';
-        } else if (inside && slow) {
+        } else if (sm.flags & (FLAG_LATENCY | FLAG_SPIKE)) {
           s += '<path d="M' + px + ' ' + (cy0 - 4) + 'l4 4-4 4-4-4z" fill="var(--warn)"/>';
         } else {
           s += '<circle cx="' + px + '" cy="' + cy0 + '" r="2.6" fill="var(--c)"/>';
         }
-        t += inside ? 500 : 1000;
-      }
+      });
       s += '</g>';
     });
 
     s += '<rect x="' + x(norm.start).toFixed(1) + '" y="' + T + '" width="' + Math.max(2, x(end) - x(norm.start)).toFixed(1) + '" height="' + (SER.length * LH) + '" fill="none" stroke="var(--bad)" stroke-width="1" stroke-dasharray="4 3"/>';
 
-    const logLines = [];
-    if (samples.length) {
-      samples.slice(0, 40).forEach(sm => {
-        const clsName = sm.ok ? 'o' : 'f';
+    const logLines = samples
+      .filter(sm => sm.ts_ms >= norm.start - 5000 && sm.ts_ms <= end + 5000)
+      .sort((a, b) => a.ts_ms - b.ts_ms)
+      .slice(0, 60)
+      .map(sm => {
         const rtt = (sm.rtt_us / 1000).toFixed(1) + ' ms';
-        const label = (sm.layer || sm.target_label || 'probe').padEnd(10);
-        const err = sm.ok ? 'ok ' + rtt : (sm.err_text || 'timeout');
-        logLines.push('<span class="' + clsName + '">' + fmtT(sm.ts_ms, true) + '  ' + label + ' ' + err + '</span>');
+        const label = (sm.target_label || sm.layer || 'probe').padEnd(24);
+        const result = sm.ok ? 'ok ' + rtt : (sm.err_text || 'failed');
+        return '<span class="' + (sm.ok ? 'o' : 'f') + '">' + fmtT(sm.ts_ms, true) + '  ' + esc(label) + ' ' + esc(result) + '</span>';
       });
-    } else {
-      logLines.push('<span class="o">' + fmtT(norm.start - 1000, true) + '  gateway  192.168.1.1     ok  1.8 ms</span>');
-      c.fail.forEach(p => {
-        logLines.push('<span class="f">' + fmtT(norm.start + 200, true) + '  ' + p.padEnd(8) + ' ' + BYID[p].target.padEnd(15) + ' ' + ERR[p] + '</span>');
-      });
-      logLines.push('<span class="o">' + fmtT(end + 100, true) + '  gateway  192.168.1.1     ok  1.6 ms</span>');
-      logLines.push('<span class="muted">' + fmtT(end + 1500, true) + '  state    healthy         3 good probes, drop closed</span>');
+    if (!logLines.length) {
+      logLines.push('<span class="muted">No samples in the 5 s around the drop.</span>');
     }
 
     $('dr-body').innerHTML =
-      '<div class="proof ' + proof[0] + '">' + proof[1].replace('<svg', '<svg width="16" height="16"') + '<span>' + proof[2] + '</span></div>' +
-      '<dl class="kv"><div><dt>Length</dt><dd>' + fmtDur(norm.dur) + '</dd></div><div><dt>Router</dt><dd>' + (c.gw ? norm.gwRtt.toFixed(1) + ' ms' : 'no reply') + '</dd></div><div><dt>Probe speed</dt><dd>500 ms</dd></div></dl>' +
+      proofHTML + kv +
       '<div><h4>15 s before, during and 15 s after</h4><div class="scroll-x"><svg class="plot" style="min-width:560px" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Each probe result around the drop">' + s + '</svg></div></div>' +
       '<div><h4>Probe log</h4><pre class="log">' + logLines.join('\n') + '</pre></div>';
   } catch (err) {
-    $('dr-body').innerHTML = '<div class="empty">Failed to load event details: ' + err.message + '</div>';
+    $('dr-body').innerHTML = '<div class="empty">Failed to load event details: ' + esc(err.message) + '</div>';
   }
 }
 
@@ -588,6 +636,30 @@ function setupDialogBackdropDismiss(dialog) {
   }
 }
 
+// fetchTargets loads the configured targets so the dashboard shows the real
+// addresses and maps every target id, not just the defaults, to its series.
+async function fetchTargets() {
+  try {
+    const res = await fetch('/api/targets');
+    const data = await res.json();
+    if (!Array.isArray(data)) return;
+    const map = {};
+    data.sort((a, b) => a.id - b.id).forEach(t => {
+      const sid = LAYER_SER[t.layer];
+      if (!sid) return;
+      map[t.id] = sid;
+      const sr = BYID[sid];
+      if (sr && !sr.fromConfig && sid !== 'gw') {
+        sr.targetId = t.id;
+        sr.target = sid === 'http' ? t.address.replace(/^https?:\/\//, '').split('/')[0] : t.address;
+        sr.fromConfig = true;
+      }
+    });
+    TARGET_SER = map;
+    renderTiles();
+  } catch (_) {}
+}
+
 async function fetchStatus() {
   try {
     const res = await fetch('/api/status');
@@ -596,7 +668,7 @@ async function fetchStatus() {
       if (data.network.gateway_ip) currentGatewayIP = data.network.gateway_ip;
       if (data.network.interface) currentInterface = data.network.interface;
       $('net-label').textContent = currentInterface + (data.network.is_vpn ? ' (VPN)' : '');
-      SER[0].target = currentGatewayIP;
+      if (currentGatewayIP) SER[0].target = currentGatewayIP;
     }
     if (data.version) {
       $('ver-label').textContent = 'v' + data.version.replace(/^v/, '');
@@ -629,16 +701,14 @@ async function fetchFailedSamples() {
     const res = await fetch('/api/samples?failed_only=true&limit=200');
     const data = await res.json();
     if (Array.isArray(data)) {
-      failedSamples = data.map(sm => {
-        const proto = sm.layer === 'gw' ? 'gw' : sm.layer === 'dns' ? 'dns' : sm.layer === 'http' ? 'http' : sm.layer === 'wan_tcp' ? 'tcp' : 'icmp';
-        return {
-          ts: sm.ts_ms,
-          proto: proto,
-          cls: 'wan',
-          oid: null,
-          err: sm.err_text || 'request timed out'
-        };
-      });
+      failedSamples = data.filter(sm => serForSample(sm)).map(sm => ({
+        ts: sm.ts_ms,
+        proto: serForSample(sm),
+        target: sm.target_label || '',
+        cls: 'wan',
+        oid: null,
+        err: sm.err_text || 'request timed out'
+      }));
       failedSamples.sort((a, b) => b.ts - a.ts);
       if (F.mode === 'fail') {
         renderLog();
@@ -658,19 +728,29 @@ function ingestSnapshot(snap) {
   SER.forEach(s => {
     let raw = rtts[s.targetId];
     if (raw == null) {
-      const keys = Object.keys(rtts);
-      const match = keys.find(k => {
-        const ik = +k;
-        if (s.id === 'gw') return ik === 1;
-        if (s.id === 'icmp') return ik >= 10 && ik < 20;
-        if (s.id === 'tcp') return ik >= 20 && ik < 30;
-        if (s.id === 'dns') return ik >= 30 && ik < 40;
-        if (s.id === 'http') return ik >= 50 && ik < 60;
-        return false;
-      });
+      const match = Object.keys(rtts).find(k => serForTargetId(k) === s.id);
       if (match != null) raw = rtts[match];
     }
     v[s.id] = (raw != null && raw > 0) ? Math.max(0.4, +(raw / 1000).toFixed(1)) : null;
+  });
+
+  // A layer the detector has confirmed down is a timeout even if another
+  // target of that layer answered a while ago. A slow layer that hasn't
+  // been probed yet has no data, which isn't the same as a failure.
+  const statuses = snap.layer_statuses || {};
+  SER.forEach(sr => {
+    if (!sr.slow || v[sr.id] !== null) return;
+    const layer = Object.keys(LAYER_SER).find(l => LAYER_SER[l] === sr.id);
+    if (!statuses[layer]) v[sr.id] = undefined;
+  });
+  Object.keys(statuses).forEach(layer => {
+    const sid = LAYER_SER[layer];
+    if (sid && statuses[layer] === 3) v[sid] = null;
+  });
+  const probed = snap.last_probe_ms || {};
+  Object.keys(probed).forEach(layer => {
+    const sid = LAYER_SER[layer];
+    if (sid) lastProbeMS[sid] = probed[layer];
   });
 
   const now = snap.ts_ms || Date.now();
@@ -700,16 +780,19 @@ async function fetchRecentSamples() {
         const ts = sm.ts_ms;
         const bucketIdx = Math.floor((ts - fromMS) / 1000);
         if (bucketIdx >= 0 && bucketIdx < live.length) {
-          const s = SER.find(sr => {
-            if (sr.id === 'gw') return sm.target_id === 1 || sm.layer === 'gw';
-            if (sr.id === 'icmp') return sm.target_id >= 10 && sm.target_id < 20 || sm.layer === 'wan_icmp';
-            if (sr.id === 'tcp') return sm.target_id >= 20 && sm.target_id < 30 || sm.layer === 'wan_tcp';
-            if (sr.id === 'dns') return sm.target_id >= 30 && sm.target_id < 40 || sm.layer === 'dns';
-            if (sr.id === 'http') return sm.target_id >= 50 && sm.target_id < 60 || sm.layer === 'http';
-            return false;
-          });
+          const sid = serForSample(sm);
+          const s = sid ? BYID[sid] : null;
           if (s) {
             live[bucketIdx].v[s.id] = sm.ok && sm.rtt_us > 0 ? +(sm.rtt_us / 1000).toFixed(1) : null;
+          }
+        }
+      });
+      // Slow layers are only probed every few seconds; carry the last good
+      // value across the gap so it doesn't look like missing data.
+      SER.filter(sr => sr.slow).forEach(sr => {
+        for (let i = 1; i < live.length; i++) {
+          if (live[i].v[sr.id] === undefined && typeof live[i - 1].v[sr.id] === 'number') {
+            live[i].v[sr.id] = live[i - 1].v[sr.id];
           }
         }
       });
@@ -992,7 +1075,7 @@ function setupResetManager() {
         for (let i = 0; i < 60; i++) {
           const ts = now - (59 - i) * 1000;
           const v = {};
-          SER.forEach(s => { v[s.id] = null; });
+          SER.forEach(s => { v[s.id] = undefined; }); // no data yet (null means a failed probe)
           live.push({ ts: ts, v: v });
         }
         renderStatus();
@@ -1120,7 +1203,7 @@ function init() {
   for (let i = 0; i < 60; i++) {
     const ts = now - (59 - i) * 1000;
     const v = {};
-    SER.forEach(s => { v[s.id] = null; });
+    SER.forEach(s => { v[s.id] = undefined; }); // no data yet (null means a failed probe)
     live.push({ ts: ts, v: v });
   }
 
@@ -1130,6 +1213,7 @@ function init() {
   renderHeat();
   renderLog();
 
+  fetchTargets();
   fetchStatus();
   fetchEvents();
   fetchRecentSamples();

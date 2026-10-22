@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 func setupTestServer(t *testing.T) (*server.Server, string) {
 	tmpDir := t.TempDir()
+	t.Setenv("NETSCAN_DATA_DIR", tmpDir) // keep the port file out of the real data dir
 	dbPath := filepath.Join(tmpDir, "srv.db")
 
 	db, err := store.OpenDB(dbPath)
@@ -49,7 +51,7 @@ func setupTestServer(t *testing.T) (*server.Server, string) {
 	sched := scheduler.NewScheduler(cfg, reg, outCh, "test", nil)
 	ne := netenv.NewNetEnv(reg, make(chan netenv.SystemEvent, 10))
 
-	srv, err := server.NewServer(cfg, reader, writer, det, h, sched, ne, "test")
+	srv, err := server.NewServer(cfg, reader, writer, det, h, sched, ne, reg, "test")
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -248,5 +250,46 @@ func TestServerResetHistory(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// Pause and resume change state, so they must not be reachable with a GET
+// (which skips the CSRF check and can be triggered by any web page).
+func TestPauseResumeRejectGET(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	for _, path := range []string{"/api/pause", "/api/resume"} {
+		res, err := http.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("GET %s = %d, want 405", path, res.StatusCode)
+		}
+	}
+}
+
+func TestTargetsEndpoint(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	res, err := http.Get(baseURL + "/api/targets")
+	if err != nil {
+		t.Fatalf("GET /api/targets: %v", err)
+	}
+	defer res.Body.Close()
+	var targets []probe.Target
+	if err := json.NewDecoder(res.Body).Decode(&targets); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(targets) == 0 {
+		t.Fatal("expected the configured targets")
+	}
+	for i := 1; i < len(targets); i++ {
+		if targets[i-1].ID >= targets[i].ID {
+			t.Fatal("targets should be sorted by id")
+		}
 	}
 }

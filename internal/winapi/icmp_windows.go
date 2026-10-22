@@ -46,17 +46,6 @@ type ICMPEchoReply struct {
 	Options       IPOptionInformation
 }
 
-type EchoResult struct {
-	OK           bool
-	Reached      bool
-	Status       uint32
-	ReplyIP      net.IP
-	DurationUS   int64
-	RoundTripMS  uint32
-	TTLExpired   bool
-	ErrorMessage string
-}
-
 type ICMPPool struct {
 	handles chan windows.Handle
 	lock    sync.Mutex
