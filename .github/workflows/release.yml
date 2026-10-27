@@ -76,7 +76,7 @@ jobs:
           echo "version=$new" >> "$GITHUB_OUTPUT"
           echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
-  build:
+  build-windows:
     needs: version
     runs-on: windows-latest
     defaults:
@@ -84,8 +84,6 @@ jobs:
         shell: pwsh
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      TAG: ${{ needs.version.outputs.tag }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -113,21 +111,89 @@ jobs:
           cmd /c copy /b dist\installer-base.exe+dist\netscan-windows-amd64.zip dist\netscan-installer.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item dist\installer-base.exe
-          Push-Location dist
-          Get-ChildItem netscan.exe, updater.exe, netscan-windows-amd64.zip, netscan-installer.exe |
-            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name } |
-            Set-Content -Encoding ascii checksums.txt
-          Pop-Location
 
-      # The tag and release are created only after a successful build, so a
-      # release never exists without its binaries.
-      - name: Publish release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/netscan.exe
+            dist/updater.exe
+            dist/netscan-windows-amd64.zip
+            dist/netscan-installer.exe
+          if-no-files-found: error
+
+  build-linux:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Static, headless-only binary: no CGO and no tray dependencies.
+      - name: Build
         run: |
-          $files = "dist\netscan.exe", "dist\netscan-windows-amd64.zip", "dist\netscan-installer.exe", "dist\updater.exe", "dist\checksums.txt"
-          gh release view $env:TAG *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:TAG @files --clobber
-          } else {
-            gh release create $env:TAG @files --target "${{ needs.version.outputs.ref }}" --title $env:TAG --generate-notes
-          }
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          mkdir -p dist/pkg
+          CGO_ENABLED=0 GOOS=linux go build -trimpath -tags notray \
+            -ldflags "-s -w -X main.version=$VERSION" \
+            -o dist/pkg/netscan ./cmd/netscan
+
+      - name: Package
+        run: |
+          name="netscan-linux-$GOARCH"
+          cp packaging/systemd/netscan.service packaging/linux/install.sh dist/pkg/
+          chmod 0755 dist/pkg/netscan dist/pkg/install.sh
+          mv dist/pkg "dist/$name"
+          tar -C dist --owner=0 --group=0 -czf "dist/$name.tar.gz" "$name"
+          tar -tzf "dist/$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.goarch }}
+          path: dist/netscan-linux-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  # The tag and release are created only after every build succeeded, so a
+  # release never exists without its binaries.
+  publish:
+    needs: [version, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: assets
+        run: |
+          ls -l
+          sha256sum netscan.exe updater.exe netscan-windows-amd64.zip netscan-installer.exe \
+            netscan-linux-amd64.tar.gz netscan-linux-arm64.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Publish release
+        working-directory: assets
+        run: |
+          files="netscan.exe updater.exe netscan-windows-amd64.zip netscan-installer.exe netscan-linux-amd64.tar.gz netscan-linux-arm64.tar.gz checksums.txt"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" $files --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" $files --repo "${{ github.repository }}" \
+              --target "${{ needs.version.outputs.ref }}" --title "$TAG" --generate-notes
+          fi
