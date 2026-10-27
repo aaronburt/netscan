@@ -63,5 +63,8 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Vet without tray
+        run: go vet -tags notray ./cmd/netscan ./internal/tray
+
       - name: Test
         run: go test -race ./...

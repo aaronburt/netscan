@@ -115,7 +115,29 @@ func (s *Supervisor) Run(name string, fn func(ctx context.Context) error) {
 	}()
 }
 
-func SetupLogger(headless bool) (*slog.Logger, io.Closer) {
+// UnderSystemd reports whether the process was started by a systemd unit.
+// systemd sets INVOCATION_ID for every service it starts.
+func UnderSystemd(getenv func(string) string) bool {
+	return getenv("INVOCATION_ID") != ""
+}
+
+// ShouldRunHeadless decides whether to skip the system tray: always under
+// systemd, and on Linux whenever there is no display server to draw it on.
+func ShouldRunHeadless(goos string, getenv func(string) string) bool {
+	if UnderSystemd(getenv) {
+		return true
+	}
+	return goos == "linux" && getenv("DISPLAY") == "" && getenv("WAYLAND_DISPLAY") == ""
+}
+
+// SetupLogger returns the app logger. Under a service manager the journal
+// owns log storage and rotation, so logs go to stdout only.
+func SetupLogger(headless, service bool) (*slog.Logger, io.Closer) {
+	if service {
+		l := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		slog.SetDefault(l)
+		return l, io.NopCloser(nil)
+	}
 	if _, err := config.EnsureDataDir(); err != nil {
 		l := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 		l.Error("cannot create data dir, logging to stderr only", "error", err)

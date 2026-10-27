@@ -42,6 +42,9 @@ func main() {
 	configFlag := flag.String("config", "", "path to custom configuration file")
 	flag.Parse()
 
+	service := app.UnderSystemd(os.Getenv)
+	headless := *headlessFlag || app.ShouldRunHeadless(runtime.GOOS, os.Getenv)
+
 	if *checkUpdateFlag {
 		platform.AttachConsoleToParent()
 		cfg, _ := config.LoadConfig(*configFlag)
@@ -153,7 +156,7 @@ func main() {
 
 	updater.CleanupOldBinary()
 
-	if *headlessFlag {
+	if headless {
 		platform.AttachConsoleToParent()
 	}
 
@@ -179,9 +182,9 @@ func main() {
 		}
 	}
 
-	logger, logCloser := app.SetupLogger(*headlessFlag)
+	logger, logCloser := app.SetupLogger(headless, service)
 
-	logger.Info("starting netscan", "version", version, "headless", *headlessFlag)
+	logger.Info("starting netscan", "version", version, "headless", headless, "service", service)
 
 	cfg, err := config.LoadConfig(*configFlag)
 	if err != nil {
@@ -373,15 +376,19 @@ func main() {
 		}
 	})
 
-	if *headlessFlag {
-		if srv.Running() {
-			serverURL := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
-			fmt.Printf("NetScan %s active on %s\n", version, serverURL)
-			fmt.Printf("Dashboard & Log Viewer: %s\n", serverURL)
-		} else {
-			fmt.Printf("NetScan %s active (web UI disabled)\n", version)
+	if headless {
+		// Under a service manager stdout is the structured log, so skip the
+		// human-readable banner.
+		if !service {
+			if srv.Running() {
+				serverURL := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+				fmt.Printf("NetScan %s active on %s\n", version, serverURL)
+				fmt.Printf("Dashboard & Log Viewer: %s\n", serverURL)
+			} else {
+				fmt.Printf("NetScan %s active (web UI disabled)\n", version)
+			}
+			fmt.Println("Press Ctrl+C to stop.")
 		}
-		fmt.Println("Press Ctrl+C to stop.")
 
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
