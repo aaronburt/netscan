@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/aaronburt/netscan/internal/config"
-	"github.com/aaronburt/netscan/internal/winapi"
+	"github.com/aaronburt/netscan/internal/platform"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -181,7 +181,7 @@ func HandleExistingInstance(logger *slog.Logger) bool {
 			body.App == "netscan"
 		if ok {
 			targetURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-			if err := winapi.OpenDashboard(targetURL); err != nil {
+			if err := platform.OpenDashboard(targetURL); err != nil {
 				logger.Error("failed to open dashboard", "error", err)
 			}
 			return true

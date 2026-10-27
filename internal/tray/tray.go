@@ -9,8 +9,8 @@ import (
 	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/detector"
 	"github.com/aaronburt/netscan/internal/hub"
+	"github.com/aaronburt/netscan/internal/platform"
 	"github.com/aaronburt/netscan/internal/updater"
-	"github.com/aaronburt/netscan/internal/winapi"
 )
 
 type TrayManager struct {
@@ -76,7 +76,7 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 	mExportCSV := mExport.AddSubMenuItem("Outages (CSV)", "Download CSV of outages")
 
 	mSettings := systray.AddMenuItem("Settings", "Startup, dashboard and data options")
-	isAuto := winapi.IsAutostartEnabled()
+	isAuto := platform.IsAutostartEnabled()
 	mAutostart := mSettings.AddSubMenuItemCheckbox("Start with Windows", "Run automatically at logon", isAuto)
 	mWebUI := mSettings.AddSubMenuItemCheckbox("Enable WebUI", "Serve the browser dashboard", tm.webUIEnabled)
 	mOpenFolder := mSettings.AddSubMenuItem("Open Data Folder", "Open logs and database location")
@@ -143,19 +143,19 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 
 			case <-mOpen.ClickedCh:
 				url := tm.dashboardURL("")
-				_ = winapi.OpenDashboard(url)
+				_ = platform.OpenDashboard(url)
 
 			case <-mUpdate.ClickedCh:
 				url := tm.dashboardURL("/#update")
-				_ = winapi.OpenDashboard(url)
+				_ = platform.OpenDashboard(url)
 
 			case <-mExportReport.ClickedCh:
 				url := tm.dashboardURL("/api/export/isp-report.txt")
-				_ = winapi.OpenDashboard(url)
+				_ = platform.OpenDashboard(url)
 
 			case <-mExportCSV.ClickedCh:
 				url := tm.dashboardURL("/api/export/events.csv")
-				_ = winapi.OpenDashboard(url)
+				_ = platform.OpenDashboard(url)
 
 			case <-mPause.ClickedCh:
 				if tm.onPauseToggle != nil {
@@ -171,9 +171,9 @@ func (tm *TrayManager) onReady(ctx context.Context) {
 				}
 
 			case <-mAutostart.ClickedCh:
-				curr := winapi.IsAutostartEnabled()
+				curr := platform.IsAutostartEnabled()
 				newVal := !curr
-				_ = winapi.SetAutostart(newVal)
+				_ = platform.SetAutostart(newVal)
 				if newVal {
 					mAutostart.Check()
 				} else {

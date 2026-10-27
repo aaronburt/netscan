@@ -1,6 +1,6 @@
-//go:build !windows
+//go:build !windows && !linux
 
-package winapi
+package platform
 
 import (
 	"errors"
@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// Non-Windows stubs. NetScan only runs on Windows; these exist so the
-// platform-independent packages can be built and tested elsewhere.
+// Stubs for platforms other than Windows and Linux. NetScan does not run
+// there; these exist so the platform-independent packages build and test.
 
-var errUnsupported = errors.New("winapi: not supported on this platform")
+var errUnsupported = errors.New("platform: not supported on this platform")
 
 type MutexHandle struct{}
 

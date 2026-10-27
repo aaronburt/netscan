@@ -1,4 +1,4 @@
-package winapi
+package platform
 
 import (
 	"errors"
