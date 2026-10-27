@@ -183,20 +183,12 @@ function bannerLayerNames(n) {
   return n.fail.map(id => BYID[id] ? BYID[id].name : id).join(', ');
 }
 
-// lastEventText says what the newest event measured and nothing more. A drop
-// only blames the ISP when the router kept answering; a blip is only a brief
-// probe failure that did not meet the outage rule.
+// lastEventText says what the newest drop measured and nothing more. A drop
+// only blames the ISP when the router kept answering. Blips never reach here:
+// they stay in the timeline and are counted separately.
 function lastEventText(n) {
   const ago = '<strong>' + fmtAgo(Date.now() - (n.start + n.dur)) + ' ago</strong>';
   const gwKnown = n.gwPct != null;
-  const routerFailed = n.cls === 'local' || n.fail.includes('gw') || (gwKnown && n.gwPct < 90);
-  if (n.cls === 'blip') {
-    const len = n.dur < 1000 ? 'under 1 s' : fmtDur(n.dur);
-    return 'Connected. Last blip ' + ago + ': ' + (n.fail.length ? bannerLayerNames(n) + ' failed' : 'a probe failed') +
-      ' for ' + len + ' and recovered on its own. ' +
-      (routerFailed ? 'Your router missed a reply too, so this looks local rather than an ISP problem. ' : '') +
-      'Too short to count as a drop.';
-  }
   const c = CLS[n.cls] || CLS.wan;
   const head = 'Connected. Last drop ' + ago + ', lasted ' + fmtDur(n.dur) + ' (' + c.label + '). ';
   if (n.cls === 'local' || n.fail.includes('gw')) return head + 'Your router stopped answering too.';
@@ -214,7 +206,8 @@ function renderStatus() {
   b.dataset.state = st;
   b.innerHTML = ICO[conf[1]] + '<span>' + conf[0] + '</span>';
 
-  const lastClosed = events.filter(e => e.cls !== 'lat')[0];
+  const lastClosed = events.filter(e => e.cls !== 'lat' && e.cls !== 'blip')[0];
+  const blips24 = events.filter(e => e.cls === 'blip' && e.start > Date.now() - 864e5).length;
   let txt = '';
   if (st === 'outage') {
     txt = 'Nothing is answering from the internet. NetScan is probing every <strong>500 ms</strong> to time the drop.';
@@ -228,8 +221,10 @@ function renderStatus() {
     txt = 'Monitoring paused. Background probing is temporarily halted.';
   } else if (lastClosed) {
     txt = lastEventText(lastClosed);
+    if (blips24) txt += ' ' + blips24 + ' brief probe failure' + (blips24 === 1 ? '' : 's') + ' in the last 24 h, not counted as drops.';
   } else {
-    txt = 'Connected and monitoring all network layers. No recent outage events recorded.';
+    txt = 'Connected and monitoring all network layers. No drops recorded.';
+    if (blips24) txt += ' ' + blips24 + ' brief probe failure' + (blips24 === 1 ? '' : 's') + ' in the last 24 h, not counted as drops.';
   }
   $('status-text').innerHTML = txt;
 
