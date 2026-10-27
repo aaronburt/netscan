@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aaronburt/netscan/internal/detector"
+	"github.com/aaronburt/netscan/internal/probe"
 )
 
 type EventFilter struct {
@@ -527,6 +528,28 @@ func (r *StoreReader) QueryStats(now time.Time) (StatsSummary, error) {
 }
 
 // MaxEventID returns the highest event id stored, or 0 when there are none.
+// KnownTargets returns every (layer, address, id) the database has recorded,
+// so the registry can keep giving each host the id its history is stored under.
+func (r *StoreReader) KnownTargets() ([]probe.KnownTarget, error) {
+	rows, err := r.db.Query(`SELECT id, layer, address FROM targets ORDER BY id;`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []probe.KnownTarget
+	for rows.Next() {
+		var k probe.KnownTarget
+		var layer string
+		if err := rows.Scan(&k.ID, &layer, &k.Address); err != nil {
+			return nil, err
+		}
+		k.Layer = probe.Layer(layer)
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 func (r *StoreReader) MaxEventID() (int64, error) {
 	var id int64
 	err := r.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events;`).Scan(&id)

@@ -9,9 +9,10 @@ import (
 	"github.com/aaronburt/netscan/internal/config"
 )
 
-// Fixed target ids. Gateway and ISP hop always use these. Configured targets
-// get base+index for the first maxPerBase of each layer, which keeps ids
-// stable with older databases; any beyond that get ids from overflowIDBase up.
+// Fixed target ids. Gateway and ISP hop always use these. Other ids come from
+// the IDAllocator: the default hosts keep the base+index ids older versions
+// gave them, system resolvers prefer the systemDNSIDBase block, and every
+// other host gets an id from overflowIDBase up.
 const (
 	GatewayTargetID = 1
 	ISPHopTargetID  = 2
@@ -34,20 +35,30 @@ type TargetRegistry struct {
 	dns             []Target
 	http            []Target
 	allTargets      map[int]Target
-	nextID          int
+	ids             *IDAllocator
 	dnsQueryName    string
 	systemResolvers []string
 }
 
+// NewTargetRegistry builds a registry with no id history, as for a new
+// database. Use NewTargetRegistryWithIDs when a database may already hold
+// targets.
 func NewTargetRegistry(cfg config.Config) *TargetRegistry {
+	return NewTargetRegistryWithIDs(cfg, NewIDAllocator(nil))
+}
+
+func NewTargetRegistryWithIDs(cfg config.Config, ids *IDAllocator) *TargetRegistry {
 	r := &TargetRegistry{
 		allTargets:   make(map[int]Target),
-		nextID:       overflowIDBase,
+		ids:          ids,
 		dnsQueryName: cfg.Targets.DNSQueryName,
 	}
 
-	for i, addr := range cfg.Targets.WANICMP {
-		id := r.configuredID(wanICMPIDBase, i)
+	for _, addr := range cfg.Targets.WANICMP {
+		id := r.ids.ID(LayerWANICMP, addr, 0)
+		if _, dup := r.allTargets[id]; dup {
+			continue
+		}
 		t := Target{
 			ID:      id,
 			Layer:   LayerWANICMP,
@@ -58,8 +69,11 @@ func NewTargetRegistry(cfg config.Config) *TargetRegistry {
 		r.allTargets[id] = t
 	}
 
-	for i, addr := range cfg.Targets.WANTCP {
-		id := r.configuredID(wanTCPIDBase, i)
+	for _, addr := range cfg.Targets.WANTCP {
+		id := r.ids.ID(LayerWANTCP, addr, 0)
+		if _, dup := r.allTargets[id]; dup {
+			continue
+		}
 		t := Target{
 			ID:      id,
 			Layer:   LayerWANTCP,
@@ -70,8 +84,11 @@ func NewTargetRegistry(cfg config.Config) *TargetRegistry {
 		r.allTargets[id] = t
 	}
 
-	for i, addr := range cfg.Targets.DNS {
-		id := r.configuredID(dnsIDBase, i)
+	for _, addr := range cfg.Targets.DNS {
+		id := r.ids.ID(LayerDNS, addr, 0)
+		if _, dup := r.allTargets[id]; dup {
+			continue
+		}
 		t := Target{
 			ID:      id,
 			Layer:   LayerDNS,
@@ -82,8 +99,11 @@ func NewTargetRegistry(cfg config.Config) *TargetRegistry {
 		r.allTargets[id] = t
 	}
 
-	for i, h := range cfg.Targets.HTTP {
-		id := r.configuredID(httpIDBase, i)
+	for _, h := range cfg.Targets.HTTP {
+		id := r.ids.ID(LayerHTTP, h.URL, 0)
+		if _, dup := r.allTargets[id]; dup {
+			continue
+		}
 		label := h.URL
 		if len(label) > 30 {
 			label = label[:30] + "..."
@@ -101,16 +121,6 @@ func NewTargetRegistry(cfg config.Config) *TargetRegistry {
 	}
 
 	return r
-}
-
-// configuredID returns the id for the i-th configured target of a layer.
-func (r *TargetRegistry) configuredID(base, i int) int {
-	if i < maxPerBase {
-		return base + i
-	}
-	id := r.nextID
-	r.nextID++
-	return id
 }
 
 // WithDefaultPort adds port to addr unless it already has one. It handles
@@ -185,14 +195,14 @@ func (r *TargetRegistry) UpdateSystemResolvers(resolvers []string) {
 		seen[WithDefaultPort(t.Address, "53")] = true
 	}
 
-	for i, s := range resolvers {
+	for _, s := range resolvers {
 		key := WithDefaultPort(s, "53")
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 
-		id := r.configuredID(systemDNSIDBase, i)
+		id := r.ids.ID(LayerDNS, s, systemDNSIDBase)
 		t := Target{
 			ID:      id,
 			Layer:   LayerDNS,

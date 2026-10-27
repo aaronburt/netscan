@@ -223,9 +223,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	registry := probe.NewTargetRegistry(cfg)
 	storeWriter := store.NewStoreWriter(db, cfg)
 	storeReader := store.NewStoreReader(db)
+
+	known, err := storeReader.KnownTargets()
+	if err != nil {
+		logger.Warn("could not read known targets", "error", err)
+	}
+	registry := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(known))
 
 	for _, t := range registry.GetAllTargets() {
 		storeWriter.QueueTarget(t)

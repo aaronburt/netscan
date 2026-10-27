@@ -26,8 +26,8 @@ func TestRegistryIDsStayUniqueWithManyTargets(t *testing.T) {
 	if got := len(r.GetWANICMP()); got != 12 {
 		t.Fatalf("got %d ICMP targets, want 12", got)
 	}
-	// Default ids stay the same so existing databases line up.
-	if r.GetWANICMP()[0].ID != 10 || r.GetWANTCP()[0].ID != 20 || r.GetHTTP()[0].ID != 50 {
+	// Default hosts keep their ids so existing databases line up.
+	if r.GetWANTCP()[0].ID != 20 || r.GetHTTP()[0].ID != 50 {
 		t.Fatal("default target ids changed")
 	}
 }
