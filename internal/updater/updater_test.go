@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,11 @@ func TestFetchLatestRelease(t *testing.T) {
 					DownloadURL: "https://example.com/asset.zip",
 					Size:        1024,
 				},
+				{
+					Name:        "netscan-linux-" + runtime.GOARCH + ".tar.gz",
+					DownloadURL: "https://example.com/asset.tar.gz",
+					Size:        1024,
+				},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -107,18 +113,25 @@ func TestFetchLatestRelease(t *testing.T) {
 	if rel.Version != "0.2.0" {
 		t.Fatalf("expected version 0.2.0, got %s", rel.Version)
 	}
-	if rel.AssetName != "netscan-windows-amd64.zip" {
-		t.Fatalf("expected netscan-windows-amd64.zip, got %s", rel.AssetName)
+	wantName, wantURL := "netscan-windows-amd64.zip", "https://example.com/asset.zip"
+	if runtime.GOOS == "linux" {
+		wantName, wantURL = "netscan-linux-"+runtime.GOARCH+".tar.gz", "https://example.com/asset.tar.gz"
 	}
-	if rel.AssetURL != "https://example.com/asset.zip" {
-		t.Fatalf("expected asset url https://example.com/asset.zip, got %s", rel.AssetURL)
+	if rel.AssetName != wantName {
+		t.Fatalf("expected %s, got %s", wantName, rel.AssetName)
+	}
+	if rel.AssetURL != wantURL {
+		t.Fatalf("expected asset url %s, got %s", wantURL, rel.AssetURL)
 	}
 }
 
 func createFakePEPayload() []byte {
 	buf := make([]byte, 600*1024)
-	buf[0] = 'M'
-	buf[1] = 'Z'
+	if runtime.GOOS == "linux" {
+		copy(buf, "\x7fELF")
+	} else {
+		copy(buf, "MZ")
+	}
 	return buf
 }
 

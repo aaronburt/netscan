@@ -1032,8 +1032,13 @@ function renderUpdateModal(data) {
     $('btn-restart-up').classList.remove('hidden');
     $('up-prog-box').classList.add('hidden');
   } else if (data.state === 'available') {
-    $('up-status').textContent = 'A new release is available.';
-    $('btn-install-up').classList.remove('hidden');
+    if (data.can_apply === false) {
+      $('up-status').textContent = 'A new release is available, but NetScan cannot update itself here (install directory is read-only). Download it from the release page.';
+      $('btn-install-up').classList.add('hidden');
+    } else {
+      $('up-status').textContent = 'A new release is available.';
+      $('btn-install-up').classList.remove('hidden');
+    }
     $('btn-restart-up').classList.add('hidden');
     $('up-prog-box').classList.add('hidden');
   } else if (data.state === 'up_to_date') {
