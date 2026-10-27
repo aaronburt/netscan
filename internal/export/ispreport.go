@@ -40,13 +40,18 @@ func GenerateISPReport(
 	b.WriteString(fmt.Sprintf("Coverage Ratio:     %.1f%% of selected period\n", stats.CoveragePct))
 	b.WriteString(fmt.Sprintf("Total Loss Ratio:   %.2f%% across all targets\n", stats.TotalLossPct))
 	b.WriteString(fmt.Sprintf("Total Outages (7d): %d verified incidents\n", stats.Outages7D))
-	b.WriteString(fmt.Sprintf("Total Blips (7d):   %d micro-drops (<2s)\n\n", stats.Blips7D))
+	b.WriteString(fmt.Sprintf("Total Blips (7d):   %d brief probe failures (not outages)\n\n", stats.Blips7D))
 
 	var ispEvents []detector.Event
 	var localEvents []detector.Event
 	var latencyEvents []detector.Event
+	var blipEvents []detector.Event
 
 	for _, e := range events {
+		if e.Kind == detector.EventKindBlip {
+			blipEvents = append(blipEvents, e)
+			continue
+		}
 		if (e.Flags & detector.EventFlagPostResume) != 0 {
 			localEvents = append(localEvents, e)
 			continue
@@ -108,7 +113,29 @@ func GenerateISPReport(
 		b.WriteString("\n")
 	}
 
-	b.WriteString("5. MEASUREMENT METHODOLOGY & SPECIFICATION\n")
+	b.WriteString("5. BRIEF PROBE FAILURES (NOT OUTAGES, NOT ISP EVIDENCE)\n")
+	b.WriteString("--------------------------------------------------------------------------------\n")
+	if len(blipEvents) == 0 {
+		b.WriteString("None recorded during this period.\n\n")
+	} else {
+		b.WriteString(fmt.Sprintf("%d short failures recovered on their own without meeting the outage rule\n", len(blipEvents)))
+		b.WriteString("(two of TCP, DNS and HTTP failing together, or the router not answering).\n")
+		b.WriteString("Failures that touched only ICMP, or the router itself, say nothing about the ISP.\n\n")
+		b.WriteString(fmt.Sprintf("%-24s %-12s %-24s %-12s\n", "Start Time", "Failed for", "Failed checks", "Gateway OK"))
+		b.WriteString(strings.Repeat("-", 80) + "\n")
+		for _, e := range blipEvents {
+			startStr := time.UnixMilli(e.StartMS).Local().Format("2006-01-02 15:04:05")
+			durStr := "<1s"
+			if e.DurationMS != nil && *e.DurationMS >= 1000 {
+				durStr = fmt.Sprintf("%.1fs", float64(*e.DurationMS)/1000.0)
+			}
+			b.WriteString(fmt.Sprintf("%-24s %-12s %-24s %-12s\n",
+				startStr, durStr, failedLayerNames(e.LayersDown), fmt.Sprintf("%.1f%%", e.GatewayOKPct)))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("6. MEASUREMENT METHODOLOGY & SPECIFICATION\n")
 	b.WriteString("--------------------------------------------------------------------------------\n")
 	b.WriteString("1. High-Frequency Staggered Polling: 1000ms healthy interval, 500ms suspect mode.\n")
 	b.WriteString("2. Multi-Protocol Quorum: An outage requires concurrent failure across multiple\n")
@@ -121,4 +148,27 @@ func GenerateISPReport(
 
 	_, err := w.Write([]byte(b.String()))
 	return err
+}
+
+func failedLayerNames(mask int) string {
+	var names []string
+	for _, l := range []struct {
+		bit  int
+		name string
+	}{
+		{detector.LayerMaskGateway, "Gateway"},
+		{detector.LayerMaskISPEdge, "ISP hop"},
+		{detector.LayerMaskWANICMP, "ICMP"},
+		{detector.LayerMaskWANTCP, "TCP"},
+		{detector.LayerMaskDNS, "DNS"},
+		{detector.LayerMaskHTTP, "HTTP"},
+	} {
+		if mask&l.bit != 0 {
+			names = append(names, l.name)
+		}
+	}
+	if len(names) == 0 {
+		return "unknown"
+	}
+	return strings.Join(names, ", ")
 }

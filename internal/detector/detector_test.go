@@ -526,3 +526,67 @@ func TestOutageNeedsTwoOfThreeCheckTypes(t *testing.T) {
 		})
 	}
 }
+
+// A blip should report what failed and how long probes were failing, not how
+// long the three good ticks took to confirm recovery.
+func TestBlipRecordsFailedLayersAndDuration(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	failAt := clock.Now().UnixMilli()
+	d.ProcessProbe(makeProbe(1, probe.LayerGateway, false, clock))
+	d.ProcessProbe(makeProbe(10, probe.LayerWANICMP, false, clock))
+
+	var created *detector.Event
+	for i := 0; i < 6 && created == nil; i++ {
+		clock.Advance(time.Second)
+		created, _ = sendTick(d, clock, true, true, true)
+	}
+	if created == nil || created.Kind != detector.EventKindBlip {
+		t.Fatalf("expected a blip event, got %+v", created)
+	}
+	want := detector.LayerMaskGateway | detector.LayerMaskWANICMP
+	if created.LayersDown != want {
+		t.Fatalf("blip layers = %b, want %b", created.LayersDown, want)
+	}
+	if created.Classification != detector.ClassGateway {
+		t.Fatalf("blip class = %s, want GATEWAY (the router failed too)", created.Classification)
+	}
+	if created.DurationMS == nil || *created.DurationMS != 0 {
+		t.Fatalf("blip duration = %v, want 0 (all failures in one instant)", created.DurationMS)
+	}
+	if created.EndMS == nil || *created.EndMS != failAt {
+		t.Fatalf("blip end = %v, want the last failed probe %d", created.EndMS, failAt)
+	}
+	if created.EndUncertMS == nil || *created.EndUncertMS < 1000 {
+		t.Fatalf("blip end uncertainty = %v, want the recovery wait", created.EndUncertMS)
+	}
+	if created.GatewayOKPct >= 100 {
+		t.Fatalf("gateway ok = %.1f, want below 100 since the gateway failed", created.GatewayOKPct)
+	}
+}
+
+func TestICMPOnlyBlipIsNotAttributedToWAN(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	sendTick(d, clock, true, true, true)
+
+	clock.Advance(time.Second)
+	d.ProcessProbe(makeProbe(10, probe.LayerWANICMP, false, clock))
+	var created *detector.Event
+	for i := 0; i < 6 && created == nil; i++ {
+		clock.Advance(time.Second)
+		created, _ = sendTick(d, clock, true, true, true)
+	}
+	if created == nil {
+		t.Fatalf("expected a blip")
+	}
+	if created.Classification == detector.ClassWAN {
+		t.Fatalf("ICMP-only blip classified as WAN")
+	}
+	if created.LayersDown != detector.LayerMaskWANICMP {
+		t.Fatalf("blip layers = %b, want only WAN ICMP", created.LayersDown)
+	}
+}

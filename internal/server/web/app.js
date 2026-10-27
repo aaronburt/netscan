@@ -59,7 +59,8 @@ const CLS = {
   dns: { label: 'DNS timeout', sev: 'bad', fail: ['dns'], gw: true },
   local: { label: 'Local Wi-Fi / gateway', sev: 'bad', fail: ['gw', 'icmp', 'tcp', 'dns', 'http'], gw: false },
   http: { label: 'HTTP timeout', sev: 'warn', fail: ['http'], gw: true },
-  lat: { label: 'High latency', sev: 'warn', fail: [], gw: true }
+  lat: { label: 'High latency', sev: 'warn', fail: [], gw: true },
+  blip: { label: 'Brief probe failure', sev: 'warn', fail: [], gw: true }
 };
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -134,12 +135,12 @@ function mapClassification(raw) {
 }
 
 function normalizeEvent(e) {
-  const cls = mapClassification(e.classification);
+  const cls = e.kind === 'blip' ? 'blip' : mapClassification(e.classification);
   const dur = e.duration_ms != null ? e.duration_ms : (e.end_ms ? e.end_ms - e.start_ms : 0);
   return {
     id: e.id,
     start: e.start_ms,
-    dur: Math.max(100, dur),
+    dur: e.kind === 'blip' ? Math.max(0, dur) : Math.max(100, dur),
     cls: cls,
     fail: failedLayers(e.layers_down || 0),
     gwPct: e.gateway_ok_pct != null ? e.gateway_ok_pct : null,
@@ -177,6 +178,33 @@ function computeStats(win) {
   return { n: ev.length, down: down, up: up, max: max };
 }
 
+// bannerLayerNames lists the checks an event recorded as failed, in words.
+function bannerLayerNames(n) {
+  return n.fail.map(id => BYID[id] ? BYID[id].name : id).join(', ');
+}
+
+// lastEventText says what the newest event measured and nothing more. A drop
+// only blames the ISP when the router kept answering; a blip is only a brief
+// probe failure that did not meet the outage rule.
+function lastEventText(n) {
+  const ago = '<strong>' + fmtAgo(Date.now() - (n.start + n.dur)) + ' ago</strong>';
+  const gwKnown = n.gwPct != null;
+  const routerFailed = n.cls === 'local' || n.fail.includes('gw') || (gwKnown && n.gwPct < 90);
+  if (n.cls === 'blip') {
+    const len = n.dur < 1000 ? 'under 1 s' : fmtDur(n.dur);
+    return 'Connected. Last blip ' + ago + ': ' + (n.fail.length ? bannerLayerNames(n) + ' failed' : 'a probe failed') +
+      ' for ' + len + ' and recovered on its own. ' +
+      (routerFailed ? 'Your router missed a reply too, so this looks local rather than an ISP problem. ' : '') +
+      'Too short to count as a drop.';
+  }
+  const c = CLS[n.cls] || CLS.wan;
+  const head = 'Connected. Last drop ' + ago + ', lasted ' + fmtDur(n.dur) + ' (' + c.label + '). ';
+  if (n.cls === 'local' || n.fail.includes('gw')) return head + 'Your router stopped answering too.';
+  if (gwKnown && n.gwPct < 90) return head + 'Your router missed some replies too, so this may not be the ISP.';
+  if (n.cls === 'lat') return head;
+  return head + (gwKnown ? 'Your router kept answering, so the problem was upstream.' : 'NetScan has no router replies on record for it, so it can\'t tell where the fault was.');
+}
+
 function renderStatus() {
   const st = calcState();
   const b = $('badge');
@@ -199,10 +227,7 @@ function renderStatus() {
   } else if (st === 'paused') {
     txt = 'Monitoring paused. Background probing is temporarily halted.';
   } else if (lastClosed) {
-    const c = CLS[lastClosed.cls] || CLS.wan;
-    const ago = fmtAgo(Date.now() - (lastClosed.start + lastClosed.dur));
-    txt = 'Connected. Last drop <strong>' + ago + ' ago</strong>, lasted ' + fmtDur(lastClosed.dur) + ' (' + c.label + '). ' +
-      (c.gw ? 'Your router kept answering, so the problem was upstream.' : 'Your router stopped answering too.');
+    txt = lastEventText(lastClosed);
   } else {
     txt = 'Connected and monitoring all network layers. No recent outage events recorded.';
   }
@@ -529,10 +554,14 @@ async function openDrawer(id) {
     const c = CLS[norm.cls] || CLS.wan;
     const end = norm.start + norm.dur;
 
-    $('dr-title').textContent = fmtDur(norm.dur) + ' drop at ' + fmtT(norm.start);
+    $('dr-title').textContent = norm.cls === 'blip'
+      ? 'Brief probe failure at ' + fmtT(norm.start)
+      : fmtDur(norm.dur) + ' drop at ' + fmtT(norm.start);
     $('dr-sub').textContent = fmtD(norm.start) + ' · ' + c.label;
 
-    const proof = norm.cls === 'local'
+    const proof = norm.cls === 'blip'
+      ? ['warn', ICO.warn, (norm.fail.length ? bannerLayerNames(norm) + ' failed' : 'A probe failed') + ' briefly and recovered without meeting the outage rule, so it is not counted as a drop and not attributed to your ISP.']
+      : norm.cls === 'local'
       ? ['bad', ICO.x, 'The router stopped answering too, so the drop started inside your network: Wi-Fi, cable or the router itself.']
       : norm.cls === 'dns'
       ? ['good', ICO.check, 'Pings and web requests kept working. Only DNS lookups failed, so try a different resolver.']
