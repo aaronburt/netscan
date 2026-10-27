@@ -300,3 +300,68 @@ func TestWriteErrorsAreCounted(t *testing.T) {
 		t.Fatalf("expected a counted write error, got %+v", st)
 	}
 }
+
+// A database written before ids were stable must keep its history attached to
+// the same hosts when the host lists change.
+func TestKnownTargetsKeepHistoryAcrossHostChanges(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := store.InitSchema(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy rows: positional ids for a customised ICMP list.
+	for _, row := range []struct {
+		id   int
+		addr string
+	}{{10, "10.1.1.1"}, {11, "1.1.1.1"}} {
+		if _, err := db.Exec(`INSERT INTO targets (id, layer, address, label, first_seen_ms) VALUES (?, 'wan_icmp', ?, 'old', 0)`, row.id, row.addr); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reader := store.NewStoreReader(db)
+	known, err := reader.KnownTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(known) != 2 {
+		t.Fatalf("got %d known targets, want 2", len(known))
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Targets.WANICMP = []string{"1.1.1.1", "8.8.8.8", "10.1.1.1"}
+	reg := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(known))
+
+	got := map[string]int{}
+	for _, tg := range reg.GetWANICMP() {
+		got[tg.Address] = tg.ID
+	}
+	if got["10.1.1.1"] != 10 || got["1.1.1.1"] != 11 {
+		t.Fatalf("history ids moved: %v", got)
+	}
+	// 8.8.8.8's old id 11 now belongs to 1.1.1.1, so it gets a fresh one.
+	if got["8.8.8.8"] < 1000 {
+		t.Fatalf("8.8.8.8 id %d, want a fresh id >= 1000", got["8.8.8.8"])
+	}
+
+	// Persisting the registry must not relabel the existing ids.
+	writer := store.NewStoreWriter(db, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = writer.Run(ctx); close(done) }()
+	for _, tg := range reg.GetAllTargets() {
+		writer.QueueTarget(tg)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	cancel()
+	<-done
+
+	var addr string
+	if err := db.QueryRow(`SELECT address FROM targets WHERE id = 10`).Scan(&addr); err != nil || addr != "10.1.1.1" {
+		t.Fatalf("id 10 = %q, %v; want 10.1.1.1", addr, err)
+	}
+}
