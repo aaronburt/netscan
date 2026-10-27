@@ -31,7 +31,7 @@ jobs:
 
       - name: Test with coverage gate
         shell: bash
-        run: scripts/coverage.sh 70
+        run: bash scripts/coverage.sh 70
 
       - name: Build binary
         run: go build -v -ldflags "-H=windowsgui" -o netscan.exe ./cmd/netscan
@@ -47,8 +47,18 @@ jobs:
           path: netscan.exe
 
   test-linux:
-    name: Test (Linux, race detector)
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux amd64
+            os: ubuntu-latest
+            goarch: amd64
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
+            goarch: arm64
 
     steps:
       - name: Checkout repository
@@ -66,5 +76,16 @@ jobs:
       - name: Vet without tray
         run: go vet -tags notray ./cmd/netscan ./internal/tray
 
-      - name: Test
+      - name: Test with race detector
         run: go test -race ./...
+
+      - name: Coverage gate
+        run: bash scripts/coverage.sh 70
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+        run: go build -v -tags notray -o netscan ./cmd/netscan
+
+      - name: Smoke test binary
+        run: bash scripts/smoke.sh "$PWD/netscan"
