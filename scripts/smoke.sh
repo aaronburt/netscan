@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN="${1:?usage: smoke.sh path/to/netscan.exe}"
+BIN="${1:?usage: smoke.sh path/to/netscan[.exe]}"
 PORT="${SMOKE_PORT:-19191}"
 DATA="$(mktemp -d)"
 export NETSCAN_DATA_DIR="$DATA"
@@ -14,10 +14,14 @@ cleanup() {
   STATUS=$?
   set +e
   if [ -n "${PID:-}" ]; then
-    WINPID="$(cat "/proc/$PID/winpid" 2>/dev/null)"
-    if [ -n "$WINPID" ]; then
-      taskkill //F //PID "$WINPID" > /dev/null 2>&1
-    fi
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        WINPID="$(cat "/proc/$PID/winpid" 2>/dev/null)"
+        if [ -n "$WINPID" ]; then
+          taskkill //F //PID "$WINPID" > /dev/null 2>&1
+        fi
+        ;;
+    esac
     kill "$PID" 2>/dev/null
     for _ in $(seq 1 20); do
       kill -0 "$PID" 2>/dev/null || break
