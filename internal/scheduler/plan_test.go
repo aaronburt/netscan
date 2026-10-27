@@ -11,11 +11,11 @@ import (
 
 func newPlanScheduler(t *testing.T) *Scheduler {
 	t.Helper()
-	cfg := config.DefaultConfig()
-	reg := probe.NewTargetRegistry(cfg)
+	prof := config.Standard()
+	reg := probe.NewTargetRegistry(prof)
 	reg.SetGateway(net.ParseIP("192.168.1.1"))
 	reg.SetISPHop(net.ParseIP("10.0.0.1"), 2)
-	return NewScheduler(cfg, reg, make(chan probe.ProbeResult, 1), "test", nil)
+	return NewScheduler(prof, reg, make(chan probe.ProbeResult, 1), "test", nil)
 }
 
 // Normal mode should probe the gateway and the first WAN ping host every
@@ -129,10 +129,10 @@ func TestConfirmTargetIsAnotherInTheSameLayer(t *testing.T) {
 	}
 
 	// A layer with a single target can't be confirmed either.
-	cfg := config.DefaultConfig()
-	cfg.Targets.DNS = []string{"1.1.1.1:53"}
-	reg := probe.NewTargetRegistry(cfg)
-	single := NewScheduler(cfg, reg, make(chan probe.ProbeResult, 1), "test", nil)
+	prof := config.Standard()
+	prof.Targets.DNS = []string{"1.1.1.1:53"}
+	reg := probe.NewTargetRegistry(prof)
+	single := NewScheduler(prof, reg, make(chan probe.ProbeResult, 1), "test", nil)
 	if _, ok := single.confirmTarget(reg.GetDNS()[0]); ok {
 		t.Fatal("single DNS target should have no confirm target")
 	}
@@ -159,12 +159,12 @@ func collect(ch chan probe.ProbeResult, want int, wait time.Duration) []probe.Pr
 }
 
 func TestFailedProbeIsConfirmedOnce(t *testing.T) {
-	cfg := config.DefaultConfig()
+	prof := config.Standard()
 	// Nothing listens on these ports, so both probes fail fast.
-	cfg.Targets.WANTCP = []string{"127.0.0.1:1", "127.0.0.1:2"}
-	reg := probe.NewTargetRegistry(cfg)
+	prof.Targets.WANTCP = []string{"127.0.0.1:1", "127.0.0.1:2"}
+	reg := probe.NewTargetRegistry(prof)
 	out := make(chan probe.ProbeResult, 10)
-	s := NewScheduler(cfg, reg, out, "test", nil)
+	s := NewScheduler(prof, reg, out, "test", nil)
 	target := reg.GetWANTCP()[0]
 
 	ctx := t.Context()

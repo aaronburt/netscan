@@ -11,18 +11,18 @@ import (
 )
 
 func TestSchedulerHealthyFlow(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Intervals.NormalMS = 100
-	cfg.Intervals.FastMS = 50
-	cfg.Targets.WANICMP = []string{"127.0.0.1"}
-	cfg.Targets.WANTCP = []string{"127.0.0.1:80"}
-	cfg.Targets.DNS = []string{"127.0.0.1:53"}
-	cfg.Targets.HTTP = []config.HTTPTargetConfig{}
+	prof := config.Standard()
+	prof.Intervals.NormalMS = 100
+	prof.Intervals.FastMS = 50
+	prof.Targets.WANICMP = []string{"127.0.0.1"}
+	prof.Targets.WANTCP = []string{"127.0.0.1:80"}
+	prof.Targets.DNS = []string{"127.0.0.1:53"}
+	prof.Targets.HTTP = []config.HTTPTargetConfig{}
 
-	reg := probe.NewTargetRegistry(cfg)
+	reg := probe.NewTargetRegistry(prof)
 	outCh := make(chan probe.ProbeResult, 100)
 
-	sched := scheduler.NewScheduler(cfg, reg, outCh, "test", nil)
+	sched := scheduler.NewScheduler(prof, reg, outCh, "test", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -62,11 +62,11 @@ loop:
 }
 
 func TestSchedulerFastMode(t *testing.T) {
-	cfg := config.DefaultConfig()
-	reg := probe.NewTargetRegistry(cfg)
+	prof := config.Standard()
+	reg := probe.NewTargetRegistry(prof)
 	outCh := make(chan probe.ProbeResult, 10)
 
-	sched := scheduler.NewScheduler(cfg, reg, outCh, "test", nil)
+	sched := scheduler.NewScheduler(prof, reg, outCh, "test", nil)
 	if sched.IsFastMode() {
 		t.Fatalf("expected healthy mode initially")
 	}

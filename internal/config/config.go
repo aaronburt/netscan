@@ -1,8 +1,6 @@
 package config
 
 import (
-	"encoding/json"
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -92,13 +90,19 @@ type UpdateConfig struct {
 
 type Config struct {
 	HTTP             HTTPConfig      `json:"http"`
-	Intervals        IntervalsConfig `json:"intervals"`
-	TimeoutsMS       TimeoutsConfig  `json:"timeouts_ms"`
-	Targets          TargetsConfig   `json:"targets"`
 	Latency          LatencyConfig   `json:"latency"`
 	Retention        RetentionConfig `json:"retention"`
 	PostResumeGraceS int             `json:"post_resume_grace_s"`
 	Update           UpdateConfig    `json:"update"`
+
+	// ActiveProfile is the id of the profile the monitor runs. Profiles holds
+	// the custom ones; the built-ins live in code.
+	ActiveProfile string    `json:"active_profile"`
+	Profiles      []Profile `json:"profiles"`
+
+	// LoadWarnings lists things LoadConfig fixed or dropped, such as a custom
+	// profile that broke the rules. It is never written to disk.
+	LoadWarnings []string `json:"-"`
 }
 
 func DefaultConfig() Config {
@@ -107,58 +111,6 @@ func DefaultConfig() Config {
 			Enabled: true,
 			Addr:    "127.0.0.1",
 			Port:    9095,
-		},
-		Intervals: IntervalsConfig{
-			NormalMS:         1000,
-			FastMS:           500,
-			FastExitHealthyS: 10,
-			FastMaxOutageS:   120,
-
-			ISPHopMS:           2000,
-			WANICMPSecondaryMS: 5000,
-			WANTCPMS:           5000,
-			DNSMS:              5000,
-			HTTPMS:             15000,
-		},
-		TimeoutsMS: TimeoutsConfig{
-			ICMP: 1000,
-			TCP:  1200,
-			DNS:  1200,
-			HTTP: 2000,
-		},
-		Targets: TargetsConfig{
-			WANICMP: []string{
-				"1.1.1.1",
-				"8.8.8.8",
-				"9.9.9.9",
-			},
-			WANTCP: []string{
-				"1.1.1.1:443",
-				"8.8.8.8:443",
-				"9.9.9.9:443",
-			},
-			DNS: []string{
-				"1.1.1.1:53",
-				"8.8.8.8:53",
-				"9.9.9.9:53",
-			},
-			DNSIncludeSystem: true,
-			DNSQueryName:     "www.google.com",
-			HTTP: []HTTPTargetConfig{
-				{
-					URL:    "http://connectivitycheck.gstatic.com/generate_204",
-					Status: 204,
-				},
-				{
-					URL:        "http://www.msftconnecttest.com/connecttest.txt",
-					Status:     200,
-					BodyPrefix: "Microsoft Connect Test",
-				},
-				{
-					URL:    "https://www.google.com/generate_204",
-					Status: 204,
-				},
-			},
 		},
 		Latency: LatencyConfig{
 			BaselineWindowS: 300,
@@ -181,6 +133,7 @@ func DefaultConfig() Config {
 			MinFreeDiskMB:   1024,
 		},
 		PostResumeGraceS: 20,
+		ActiveProfile:    ProfileStandard,
 		Update: UpdateConfig{
 			CheckOnStartup: true,
 			AutoCheckHours: 24,
@@ -205,61 +158,8 @@ func (c *Config) ValidateAndApplyMinimums() {
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		c.HTTP.Port = d.HTTP.Port
 	}
-	if c.Intervals.NormalMS < 200 {
-		c.Intervals.NormalMS = d.Intervals.NormalMS
-	}
-	if c.Intervals.FastMS < 100 {
-		c.Intervals.FastMS = d.Intervals.FastMS
-	}
-	if c.Intervals.FastExitHealthyS < 1 {
-		c.Intervals.FastExitHealthyS = d.Intervals.FastExitHealthyS
-	}
-	if c.Intervals.FastMaxOutageS < 10 {
-		c.Intervals.FastMaxOutageS = d.Intervals.FastMaxOutageS
-	}
-	for _, p := range []struct {
-		v   *int
-		def int
-	}{
-		{&c.Intervals.ISPHopMS, d.Intervals.ISPHopMS},
-		{&c.Intervals.WANICMPSecondaryMS, d.Intervals.WANICMPSecondaryMS},
-		{&c.Intervals.WANTCPMS, d.Intervals.WANTCPMS},
-		{&c.Intervals.DNSMS, d.Intervals.DNSMS},
-		{&c.Intervals.HTTPMS, d.Intervals.HTTPMS},
-	} {
-		if *p.v <= 0 {
-			*p.v = p.def
-		}
-		if *p.v < c.Intervals.NormalMS {
-			*p.v = c.Intervals.NormalMS
-		}
-	}
-	if c.TimeoutsMS.ICMP < 200 {
-		c.TimeoutsMS.ICMP = d.TimeoutsMS.ICMP
-	}
-	if c.TimeoutsMS.TCP < 200 {
-		c.TimeoutsMS.TCP = d.TimeoutsMS.TCP
-	}
-	if c.TimeoutsMS.DNS < 200 {
-		c.TimeoutsMS.DNS = d.TimeoutsMS.DNS
-	}
-	if c.TimeoutsMS.HTTP < 500 {
-		c.TimeoutsMS.HTTP = d.TimeoutsMS.HTTP
-	}
-	if len(c.Targets.WANICMP) == 0 {
-		c.Targets.WANICMP = d.Targets.WANICMP
-	}
-	if len(c.Targets.WANTCP) == 0 {
-		c.Targets.WANTCP = d.Targets.WANTCP
-	}
-	if len(c.Targets.DNS) == 0 {
-		c.Targets.DNS = d.Targets.DNS
-	}
-	if c.Targets.DNSQueryName == "" {
-		c.Targets.DNSQueryName = d.Targets.DNSQueryName
-	}
-	if len(c.Targets.HTTP) == 0 {
-		c.Targets.HTTP = d.Targets.HTTP
+	if c.ActiveProfile == "" {
+		c.ActiveProfile = d.ActiveProfile
 	}
 	if c.Retention.RawPartitions < 1 {
 		c.Retention.RawPartitions = 1
@@ -384,52 +284,6 @@ func PortPath() string {
 
 func AppLogPath() string {
 	return filepath.Join(DataDir(), "logs", "app.log")
-}
-
-func LoadConfig(path string) (Config, error) {
-	if path == "" {
-		path = ConfigPath()
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			cfg := DefaultConfig()
-			saveErr := SaveConfig(path, cfg)
-			return cfg, saveErr
-		}
-		cfg := DefaultConfig()
-		return cfg, err
-	}
-
-	cfg := DefaultConfig()
-	// encoding/json decodes into the existing elements of a slice, so a
-	// shorter or different "http" list would inherit fields (like
-	// body_prefix) from the default entry at the same position. Start from
-	// empty; ValidateAndApplyMinimums puts the defaults back if it's absent.
-	cfg.Targets.HTTP = nil
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		cfg.ValidateAndApplyMinimums()
-		return cfg, err
-	}
-
-	cfg.ValidateAndApplyMinimums()
-	return cfg, nil
-}
-
-func SaveConfig(path string, cfg Config) error {
-	if path == "" {
-		path = ConfigPath()
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
 }
 
 // SetWebUIEnabled persists the dashboard on/off choice, leaving the rest of

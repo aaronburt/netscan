@@ -16,7 +16,7 @@ func idsByAddress(ts []probe.Target) map[string]int {
 }
 
 func TestDefaultHostsKeepLegacyIDs(t *testing.T) {
-	r := probe.NewTargetRegistry(config.DefaultConfig())
+	r := probe.NewTargetRegistry(config.Standard())
 	for i, tg := range r.GetWANICMP() {
 		if tg.ID != 10+i {
 			t.Errorf("icmp %s id %d, want %d", tg.Address, tg.ID, 10+i)
@@ -40,12 +40,12 @@ func TestDefaultHostsKeepLegacyIDs(t *testing.T) {
 }
 
 func TestIDsFollowHostNotPosition(t *testing.T) {
-	cfg := config.DefaultConfig()
+	prof := config.Standard()
 	ids := probe.NewIDAllocator(nil)
-	first := idsByAddress(probe.NewTargetRegistryWithIDs(cfg, ids).GetWANICMP())
+	first := idsByAddress(probe.NewTargetRegistryWithIDs(prof, ids).GetWANICMP())
 
-	cfg.Targets.WANICMP = []string{"9.9.9.9", "10.1.1.1", "1.1.1.1"}
-	second := idsByAddress(probe.NewTargetRegistryWithIDs(cfg, ids).GetWANICMP())
+	prof.Targets.WANICMP = []string{"9.9.9.9", "10.1.1.1", "1.1.1.1"}
+	second := idsByAddress(probe.NewTargetRegistryWithIDs(prof, ids).GetWANICMP())
 
 	for _, addr := range []string{"1.1.1.1", "9.9.9.9"} {
 		if first[addr] != second[addr] {
@@ -58,17 +58,17 @@ func TestIDsFollowHostNotPosition(t *testing.T) {
 }
 
 func TestIDsSurviveRestartFromKnownTargets(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Targets.WANICMP = []string{"10.1.1.1", "10.2.2.2"}
-	r1 := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(nil))
+	prof := config.Standard()
+	prof.Targets.WANICMP = []string{"10.1.1.1", "10.2.2.2"}
+	r1 := probe.NewTargetRegistryWithIDs(prof, probe.NewIDAllocator(nil))
 
 	var known []probe.KnownTarget
 	for _, tg := range r1.GetAllTargets() {
 		known = append(known, probe.KnownTarget{ID: tg.ID, Layer: tg.Layer, Address: tg.Address})
 	}
 
-	cfg.Targets.WANICMP = []string{"10.3.3.3", "10.2.2.2", "10.1.1.1"}
-	r2 := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(known))
+	prof.Targets.WANICMP = []string{"10.3.3.3", "10.2.2.2", "10.1.1.1"}
+	r2 := probe.NewTargetRegistryWithIDs(prof, probe.NewIDAllocator(known))
 	a, b := idsByAddress(r1.GetWANICMP()), idsByAddress(r2.GetWANICMP())
 	for _, addr := range []string{"10.1.1.1", "10.2.2.2"} {
 		if a[addr] != b[addr] {
@@ -84,7 +84,7 @@ func TestIDsSurviveRestartFromKnownTargets(t *testing.T) {
 // when that was not 1.1.1.1. The default host must not steal that id back.
 func TestDefaultHostDoesNotTakeIDOfAnotherHost(t *testing.T) {
 	known := []probe.KnownTarget{{ID: 10, Layer: probe.LayerWANICMP, Address: "10.9.9.9"}}
-	r := probe.NewTargetRegistryWithIDs(config.DefaultConfig(), probe.NewIDAllocator(known))
+	r := probe.NewTargetRegistryWithIDs(config.Standard(), probe.NewIDAllocator(known))
 	got := idsByAddress(r.GetWANICMP())
 	if got["10.9.9.9"] != 0 && got["10.9.9.9"] != 10 {
 		t.Fatalf("unexpected id %d", got["10.9.9.9"])
@@ -95,7 +95,7 @@ func TestDefaultHostDoesNotTakeIDOfAnotherHost(t *testing.T) {
 }
 
 func TestSystemResolversKeepIDs(t *testing.T) {
-	r := probe.NewTargetRegistry(config.DefaultConfig())
+	r := probe.NewTargetRegistry(config.Standard())
 	r.UpdateSystemResolvers([]string{"192.168.1.1", "192.168.1.2"})
 	before := map[string]int{}
 	for _, tg := range r.GetDNS() {
@@ -114,9 +114,9 @@ func TestSystemResolversKeepIDs(t *testing.T) {
 }
 
 func TestDuplicateConfiguredHostIsListedOnce(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Targets.WANTCP = []string{"1.1.1.1:443", "1.1.1.1:443"}
-	if got := len(probe.NewTargetRegistry(cfg).GetWANTCP()); got != 1 {
+	prof := config.Standard()
+	prof.Targets.WANTCP = []string{"1.1.1.1:443", "1.1.1.1:443"}
+	if got := len(probe.NewTargetRegistry(prof).GetWANTCP()); got != 1 {
 		t.Fatalf("got %d tcp targets, want 1", got)
 	}
 }

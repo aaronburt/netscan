@@ -45,11 +45,11 @@ func setupTestServer(t *testing.T) (*server.Server, string) {
 
 	reader := store.NewStoreReader(db)
 	writer := store.NewStoreWriter(db, cfg)
-	det := detector.NewDetector(cfg, nil, nil)
+	det := detector.NewDetector(cfg, config.Standard(), nil, nil)
 	h := hub.NewHub()
-	reg := probe.NewTargetRegistry(cfg)
+	reg := probe.NewTargetRegistry(config.Standard())
 	outCh := make(chan probe.ProbeResult, 10)
-	sched := scheduler.NewScheduler(cfg, reg, outCh, "test", nil)
+	sched := scheduler.NewScheduler(config.Standard(), reg, outCh, "test", nil)
 	ne := netenv.NewNetEnv(reg, make(chan netenv.SystemEvent, 10))
 
 	srv, err := server.NewServer(cfg, reader, writer, det, h, sched, ne, reg, "test")

@@ -13,8 +13,11 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.HTTP.Port != 9095 {
 		t.Fatalf("expected port 9095, got %d", cfg.HTTP.Port)
 	}
-	if cfg.Intervals.NormalMS != 1000 {
-		t.Fatalf("expected normal interval 1000, got %d", cfg.Intervals.NormalMS)
+	if cfg.ActiveProfile != config.ProfileStandard {
+		t.Fatalf("expected standard profile, got %q", cfg.ActiveProfile)
+	}
+	if cfg.Active().Intervals.NormalMS != 1000 {
+		t.Fatalf("expected normal interval 1000, got %d", cfg.Active().Intervals.NormalMS)
 	}
 	if cfg.Retention.RawPartitions != 2 {
 		t.Fatalf("expected raw partitions 2, got %d", cfg.Retention.RawPartitions)
@@ -32,8 +35,8 @@ func TestValidateAndApplyMinimums(t *testing.T) {
 	if cfg.HTTP.Port != 9095 {
 		t.Fatalf("expected port 9095, got %d", cfg.HTTP.Port)
 	}
-	if cfg.Intervals.NormalMS != 1000 {
-		t.Fatalf("expected 1000ms minimum, got %d", cfg.Intervals.NormalMS)
+	if cfg.ActiveProfile != config.ProfileStandard {
+		t.Fatalf("expected empty active profile to become standard, got %q", cfg.ActiveProfile)
 	}
 	if cfg.Retention.RollupDays != 7 {
 		t.Fatalf("expected 7 days minimum rollup retention, got %d", cfg.Retention.RollupDays)
@@ -104,7 +107,7 @@ func TestLoadConfigMalformedJSON(t *testing.T) {
 }
 
 func TestNormalModePeriodDefaults(t *testing.T) {
-	iv := config.DefaultConfig().Intervals
+	iv := config.Standard().Intervals
 	if iv.ISPHopMS != 2000 || iv.WANICMPSecondaryMS != 5000 || iv.WANTCPMS != 5000 || iv.DNSMS != 5000 || iv.HTTPMS != 15000 {
 		t.Fatalf("unexpected default periods: %+v", iv)
 	}
@@ -122,22 +125,23 @@ func TestOldConfigGetsPeriodDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Intervals.DNSMS != 5000 || cfg.Intervals.HTTPMS != 15000 {
-		t.Fatalf("periods not defaulted: %+v", cfg.Intervals)
+	iv := cfg.Active().Intervals
+	if iv.DNSMS != 5000 || iv.HTTPMS != 15000 {
+		t.Fatalf("periods not defaulted: %+v", iv)
 	}
 }
 
 func TestPeriodsNeverBelowNormalInterval(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Intervals.NormalMS = 2000
-	cfg.Intervals.DNSMS = 500
-	cfg.Intervals.HTTPMS = 0
-	cfg.ValidateAndApplyMinimums()
-	if cfg.Intervals.DNSMS != 2000 {
-		t.Fatalf("DNSMS = %d, want it raised to 2000", cfg.Intervals.DNSMS)
+	p := config.Standard()
+	p.Intervals.NormalMS = 2000
+	p.Intervals.DNSMS = 500
+	p.Intervals.HTTPMS = 0
+	p.Normalize()
+	if p.Intervals.DNSMS != 2000 {
+		t.Fatalf("DNSMS = %d, want it raised to 2000", p.Intervals.DNSMS)
 	}
-	if cfg.Intervals.HTTPMS != 15000 {
-		t.Fatalf("HTTPMS = %d, want the default for an unset value", cfg.Intervals.HTTPMS)
+	if p.Intervals.HTTPMS != 15000 {
+		t.Fatalf("HTTPMS = %d, want the default for an unset value", p.Intervals.HTTPMS)
 	}
 }
 
@@ -153,10 +157,10 @@ func TestCustomHTTPTargetsDoNotInheritDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if len(cfg.Targets.HTTP) != 2 {
-		t.Fatalf("got %d http targets, want 2", len(cfg.Targets.HTTP))
+	if len(cfg.Active().Targets.HTTP) != 2 {
+		t.Fatalf("got %d http targets, want 2", len(cfg.Active().Targets.HTTP))
 	}
-	for _, h := range cfg.Targets.HTTP {
+	for _, h := range cfg.Active().Targets.HTTP {
 		if h.BodyPrefix != "" {
 			t.Fatalf("%s inherited body_prefix %q from a default", h.URL, h.BodyPrefix)
 		}
@@ -167,8 +171,8 @@ func TestCustomHTTPTargetsDoNotInheritDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, _ = config.LoadConfig(path)
-	if len(cfg.Targets.HTTP) != 3 || cfg.Targets.HTTP[1].BodyPrefix == "" {
-		t.Fatalf("default http targets not restored: %+v", cfg.Targets.HTTP)
+	if h := cfg.Active().Targets.HTTP; len(h) != 3 || h[1].BodyPrefix == "" {
+		t.Fatalf("default http targets not restored: %+v", h)
 	}
 }
 

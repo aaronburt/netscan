@@ -332,9 +332,9 @@ func TestKnownTargetsKeepHistoryAcrossHostChanges(t *testing.T) {
 		t.Fatalf("got %d known targets, want 2", len(known))
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.Targets.WANICMP = []string{"1.1.1.1", "8.8.8.8", "10.1.1.1"}
-	reg := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(known))
+	prof := config.Standard()
+	prof.Targets.WANICMP = []string{"1.1.1.1", "8.8.8.8", "10.1.1.1"}
+	reg := probe.NewTargetRegistryWithIDs(prof, probe.NewIDAllocator(known))
 
 	got := map[string]int{}
 	for _, tg := range reg.GetWANICMP() {
@@ -349,7 +349,7 @@ func TestKnownTargetsKeepHistoryAcrossHostChanges(t *testing.T) {
 	}
 
 	// Persisting the registry must not relabel the existing ids.
-	writer := store.NewStoreWriter(db, cfg)
+	writer := store.NewStoreWriter(db, config.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = writer.Run(ctx); close(done) }()
