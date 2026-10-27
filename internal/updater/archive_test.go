@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aaronburt/netscan/internal/updater"
@@ -111,7 +112,7 @@ func TestDownloadAndExtractTarGz(t *testing.T) {
 	if !bytes.Equal(got, binary) {
 		t.Fatal("extracted file is not the netscan binary")
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm()&0o100 == 0 {
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm()&0o100 == 0 {
 		t.Fatalf("extracted binary is not executable: %v", fi.Mode())
 	}
 	if filepath.Dir(path) != dir {
