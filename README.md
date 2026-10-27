@@ -2,7 +2,7 @@
 
 # NetScan
 
-A lightweight Windows internet stability monitor designed to detect micro-drops, isolate connection faults, and log historical network health.
+A lightweight internet stability monitor for Windows and Linux (amd64 and arm64, including the Raspberry Pi) designed to detect micro-drops, isolate connection faults, and log historical network health.
 
 ## Features
 
@@ -43,7 +43,7 @@ A failed probe is confirmed straight away against another target in the same lay
 
 ## Development
 
-NetScan only runs on Windows, but the core packages (probes, scheduler, detector, store, server) build and test on any OS. Windows-only code sits behind build tags with small stubs for other platforms.
+NetScan runs on Windows and Linux. OS-specific code lives in `internal/platform` behind build tags, and the core packages (probes, scheduler, detector, store, server) build and test on any OS.
 
 ```sh
 go vet ./...
@@ -71,6 +71,27 @@ To uninstall:
 ```
 
 Or use Windows Settings -> Installed Apps -> NetScan -> Uninstall.
+
+## Linux
+
+Linux builds are headless: there is no tray icon, and the dashboard is served on the loopback address only ([http://127.0.0.1:9095](http://127.0.0.1:9095)). Download the tarball for your CPU from the [latest release](https://github.com/aaronburt/netscan/releases/latest) (`netscan-linux-amd64.tar.gz`, or `netscan-linux-arm64.tar.gz` for a Raspberry Pi 4 or other 64-bit ARM board), then install it as a systemd service:
+
+```sh
+tar -xzf netscan-linux-arm64.tar.gz
+cd netscan-linux-arm64
+sudo ./install.sh
+```
+
+The script creates a `netscan` system user, installs the binary to `/opt/netscan/netscan` (linked from `/usr/local/bin/netscan`) and the unit to `/etc/systemd/system/netscan.service`, then enables and starts the service. History and config live in `/var/lib/netscan`. Running `install.sh` again from a newer tarball upgrades in place.
+
+```sh
+systemctl status netscan
+journalctl -u netscan -f
+```
+
+The service user owns `/opt/netscan`, so the dashboard's **Download & Install** button can update NetScan itself: it verifies the release checksum, swaps the binary, and exits so systemd (`Restart=always`) starts the new version. If the binary's directory isn't writable (for example a binary you placed in `/usr/local/bin` yourself), the dashboard points you to the release page instead. To update from a shell, run `sudo systemctl restart netscan` after `netscan -update`, or re-run `install.sh` from the new tarball.
+
+To remove it, run `sudo ./uninstall.sh` from the extracted tarball. Your history is kept in `/var/lib/netscan`; add `--purge` to delete it and the `netscan` user too.
 
 ## Usage
 
@@ -127,7 +148,7 @@ Every merged PR ships a release automatically. The PR title decides the version 
 - anything else (`fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`, `chore:`, `style:`, `revert:`) bumps the patch version (0.5.0 → 0.5.1)
 - `!` breaking-change markers in a title are rejected: major bumps are never automatic
 
-A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe` and `checksums.txt`.
+A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `netscan-linux-amd64.tar.gz`, `netscan-linux-arm64.tar.gz` and `checksums.txt`.
 
 ### Major release
 

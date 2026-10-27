@@ -127,6 +127,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to replace executable: %v\n", err)
 			os.Exit(1)
 		}
+		if runtime.GOOS == "linux" {
+			fmt.Printf("Successfully updated to %s. Restart NetScan to run it (sudo systemctl restart netscan).\n", res.Release.Version)
+			os.Exit(0)
+		}
 		fmt.Printf("Successfully updated to %s! Relaunching NetScan...\n", res.Release.Version)
 		if err := updater.RelaunchExecutable(os.Args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to relaunch executable: %v\n", err)

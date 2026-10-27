@@ -1,8 +1,10 @@
 package updater
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -131,8 +133,15 @@ func SelectAsset(assets []ReleaseAsset, targetOS, targetArch string) (ReleaseAss
 
 		isZip := strings.HasSuffix(lower, ".zip")
 		isExe := strings.HasSuffix(lower, ".exe")
+		isTarGz := strings.HasSuffix(lower, ".tar.gz")
 
-		if !isZip && !isExe {
+		// Each OS only ever installs its own package type: a Linux tarball
+		// can't replace a Windows exe or the other way round.
+		if targetOS == "linux" {
+			if !isTarGz || !strings.Contains(lower, "linux") || !strings.Contains(lower, targetArch) {
+				continue
+			}
+		} else if !isZip && !isExe {
 			continue
 		}
 
@@ -156,7 +165,7 @@ func SelectAsset(assets []ReleaseAsset, targetOS, targetArch string) (ReleaseAss
 			score += 10
 		}
 
-		if isZip {
+		if isZip || isTarGz {
 			score += 5
 		} else if isExe {
 			score += 4
@@ -400,6 +409,11 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, assetURL strin
 		return "", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, computedHash)
 	}
 
+	if isGzipFile(tmpFilePath) {
+		defer os.Remove(tmpFilePath)
+		return extractTarGzBinary(tmpFilePath, targetDir)
+	}
+
 	zipReader, zipErr := zip.OpenReader(tmpFilePath)
 	if zipErr == nil {
 		defer zipReader.Close()
@@ -471,7 +485,81 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, assetURL strin
 	return tmpFilePath, nil
 }
 
+func isGzipFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	magic := make([]byte, 2)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return false
+	}
+	return magic[0] == 0x1f && magic[1] == 0x8b
+}
+
+// maxBinarySize bounds what we'll unpack from a release archive.
+const maxBinarySize = 256 << 20
+
+// extractTarGzBinary pulls the netscan binary out of a Linux release tarball
+// into a temporary file in targetDir. Member paths are never used on disk, so
+// a crafted archive can't write outside targetDir.
+func extractTarGzBinary(archivePath, targetDir string) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to read tar.gz archive: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return "", errors.New("no netscan binary found in downloaded tar.gz archive")
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to read tar.gz archive: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg || filepath.Base(hdr.Name) != "netscan" {
+			continue
+		}
+
+		out, err := os.CreateTemp(targetDir, "netscan-extracted-*.tmp")
+		if err != nil {
+			return "", fmt.Errorf("failed to create extracted executable file: %w", err)
+		}
+		outPath := out.Name()
+
+		n, copyErr := io.Copy(out, io.LimitReader(tr, maxBinarySize+1))
+		closeErr := out.Close()
+		if copyErr == nil && n > maxBinarySize {
+			copyErr = errors.New("binary in archive is too large")
+		}
+		if copyErr == nil {
+			copyErr = closeErr
+		}
+		if copyErr == nil {
+			copyErr = os.Chmod(outPath, 0o755)
+		}
+		if copyErr != nil {
+			_ = os.Remove(outPath)
+			return "", fmt.Errorf("failed to extract executable from tar.gz: %w", copyErr)
+		}
+		return outPath, nil
+	}
+}
+
 func ValidateExecutable(path string) error {
+	return validateExecutableFor(path, runtime.GOOS)
+}
+
+func validateExecutableFor(path, goos string) error {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -486,11 +574,15 @@ func ValidateExecutable(path string) error {
 	}
 	defer f.Close()
 
-	header := make([]byte, 2)
+	magic := []byte("MZ")
+	if goos == "linux" {
+		magic = []byte("\x7fELF")
+	}
+	header := make([]byte, len(magic))
 	if _, err := io.ReadFull(f, header); err != nil {
 		return err
 	}
-	if !bytes.Equal(header, []byte("MZ")) {
+	if !bytes.Equal(header, magic) {
 		return errors.New("downloaded file does not contain valid executable signature")
 	}
 	return nil
@@ -513,6 +605,18 @@ func ReplaceCurrentBinary(newBinaryPath string) error {
 	exePath, err := ExecutablePath()
 	if err != nil {
 		return err
+	}
+
+	// POSIX rename swaps the file atomically even while it's running, so
+	// there's no .old shuffle: the old process keeps its open inode.
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(newBinaryPath, 0o755); err != nil {
+			return fmt.Errorf("failed to mark new binary executable: %w", err)
+		}
+		if err := os.Rename(newBinaryPath, exePath); err != nil {
+			return fmt.Errorf("failed to move new binary into place: %w", err)
+		}
+		return nil
 	}
 
 	oldPath := exePath + ".old"
@@ -611,4 +715,21 @@ func CleanupOldBinary() {
 			}
 		}
 	}()
+}
+
+// CanReplaceBinary reports whether the directory holding the running binary
+// is writable, i.e. whether a self-update can stage and swap files there.
+func CanReplaceBinary() bool {
+	exePath, err := ExecutablePath()
+	if err != nil {
+		return false
+	}
+	f, err := os.CreateTemp(filepath.Dir(exePath), ".netscan-write-test-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }

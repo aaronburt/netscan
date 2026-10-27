@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/netscan
+ExecStart=/opt/netscan/netscan
 Restart=always
 RestartSec=5
 
@@ -25,6 +25,8 @@ CapabilityBoundingSet=CAP_NET_RAW
 # Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
+# The binary directory stays writable so the dashboard can self-update.
+ReadWritePaths=/opt/netscan
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

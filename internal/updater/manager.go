@@ -33,6 +33,9 @@ type StatusResponse struct {
 	BytesTotal      int64       `json:"bytes_total"`
 	Error           string      `json:"error,omitempty"`
 	LastCheckedMS   int64       `json:"last_checked_ms,omitempty"`
+	// CanApply is false when the install directory isn't writable, so the
+	// dashboard offers a link to the release instead of an install button.
+	CanApply bool `json:"can_apply"`
 }
 
 type Manager struct {
@@ -52,6 +55,8 @@ type Manager struct {
 	lastError        string
 	lastCheckedMS    int64
 	httpClient       *http.Client
+	canApply         bool
+	supervised       bool
 }
 
 func NewManager(repo, currentVersion string, onBeforeRestart func()) *Manager {
@@ -61,6 +66,8 @@ func NewManager(repo, currentVersion string, onBeforeRestart func()) *Manager {
 		onBeforeRestart: onBeforeRestart,
 		state:           StateIdle,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		canApply:        CanReplaceBinary(),
+		supervised:      os.Getenv("INVOCATION_ID") != "",
 	}
 }
 
@@ -96,6 +103,7 @@ func (m *Manager) Status() StatusResponse {
 		BytesTotal:      m.bytesTotal,
 		Error:           m.lastError,
 		LastCheckedMS:   m.lastCheckedMS,
+		CanApply:        m.canApply,
 	}
 }
 
@@ -148,6 +156,10 @@ func (m *Manager) Apply(ctx context.Context) error {
 	if m.state != StateAvailable || m.latestRelease == nil || m.latestRelease.AssetURL == "" {
 		m.mu.Unlock()
 		return errors.New("no update available for download")
+	}
+	if !m.canApply {
+		m.mu.Unlock()
+		return errors.New("the install directory is not writable; update manually from the release page")
 	}
 
 	m.state = StateDownloading
@@ -274,6 +286,16 @@ func (m *Manager) Restart() error {
 		if err := ReplaceCurrentBinary(stagedPath); err != nil {
 			return err
 		}
+	}
+
+	// Under systemd, exiting is enough: Restart=always starts the new binary.
+	// Relaunching ourselves would leave two instances racing for the port.
+	if m.supervised {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			os.Exit(0)
+		}()
+		return nil
 	}
 
 	if err := RelaunchExecutable(os.Args[1:]); err != nil {
