@@ -19,13 +19,13 @@ import (
 	"github.com/aaronburt/netscan/internal/detector"
 	"github.com/aaronburt/netscan/internal/hub"
 	"github.com/aaronburt/netscan/internal/netenv"
+	"github.com/aaronburt/netscan/internal/platform"
 	"github.com/aaronburt/netscan/internal/probe"
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/server"
 	"github.com/aaronburt/netscan/internal/store"
 	"github.com/aaronburt/netscan/internal/tray"
 	"github.com/aaronburt/netscan/internal/updater"
-	"github.com/aaronburt/netscan/internal/winapi"
 )
 
 var version = "dev"
@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	if *checkUpdateFlag {
-		winapi.AttachConsoleToParent()
+		platform.AttachConsoleToParent()
 		cfg, _ := config.LoadConfig(*configFlag)
 		repo := cfg.Update.Repo
 		if repo == "" {
@@ -70,7 +70,7 @@ func main() {
 	}
 
 	if *updateFlag {
-		winapi.AttachConsoleToParent()
+		platform.AttachConsoleToParent()
 		cfg, _ := config.LoadConfig(*configFlag)
 		repo := cfg.Update.Repo
 		if repo == "" {
@@ -133,7 +133,7 @@ func main() {
 	}
 
 	if *resetFlag {
-		winapi.AttachConsoleToParent()
+		platform.AttachConsoleToParent()
 		cfg, _ := config.LoadConfig(*configFlag)
 		db, err := store.OpenDB(config.DBPath())
 		if err != nil {
@@ -154,10 +154,10 @@ func main() {
 	updater.CleanupOldBinary()
 
 	if *headlessFlag {
-		winapi.AttachConsoleToParent()
+		platform.AttachConsoleToParent()
 	}
 
-	mutexHandle, acquired, err := winapi.AcquireSingleInstance(`Local\NetScan.SingleInstance`)
+	mutexHandle, acquired, err := platform.AcquireSingleInstance(`Local\NetScan.SingleInstance`)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "netscan: single-instance mutex:", err)
 		os.Exit(1)
@@ -169,7 +169,7 @@ func main() {
 		}
 		for i := 0; i < 30; i++ {
 			time.Sleep(200 * time.Millisecond)
-			mutexHandle, acquired, err = winapi.AcquireSingleInstance(`Local\NetScan.SingleInstance`)
+			mutexHandle, acquired, err = platform.AcquireSingleInstance(`Local\NetScan.SingleInstance`)
 			if err == nil && acquired {
 				break
 			}

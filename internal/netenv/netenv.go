@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aaronburt/netscan/internal/platform"
 	"github.com/aaronburt/netscan/internal/probe"
-	"github.com/aaronburt/netscan/internal/winapi"
 )
 
 type SystemEventKind string
@@ -38,7 +38,7 @@ type NetEnv struct {
 	sysEventCh chan SystemEvent
 
 	lock        sync.RWMutex
-	currentInfo winapi.NetworkInfo
+	currentInfo platform.NetworkInfo
 	ispHopIP    net.IP
 	ispHopTTL   byte
 	fingerprint string
@@ -75,7 +75,7 @@ func (n *NetEnv) Run(ctx context.Context) error {
 }
 
 func (n *NetEnv) Refresh(ctx context.Context) {
-	info, err := winapi.DiscoverNetworkInfo()
+	info, err := platform.DiscoverNetworkInfo()
 	if err == nil {
 		n.applyNetworkInfo(info)
 	}
@@ -83,7 +83,7 @@ func (n *NetEnv) Refresh(ctx context.Context) {
 }
 
 func (n *NetEnv) checkGatewayChange(ctx context.Context) {
-	info, err := winapi.DiscoverNetworkInfo()
+	info, err := platform.DiscoverNetworkInfo()
 	if err != nil {
 		return
 	}
@@ -99,7 +99,7 @@ func (n *NetEnv) checkGatewayChange(ctx context.Context) {
 	}
 }
 
-func (n *NetEnv) applyNetworkInfo(info winapi.NetworkInfo) {
+func (n *NetEnv) applyNetworkInfo(info platform.NetworkInfo) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -129,7 +129,7 @@ func (n *NetEnv) discoverISPHop(ctx context.Context) {
 		default:
 		}
 
-		res, err := winapi.SendEcho(targetIP, ttl, 1000*time.Millisecond, 1)
+		res, err := platform.SendEcho(targetIP, ttl, 1000*time.Millisecond, 1)
 		if err != nil || res.ReplyIP == nil {
 			continue
 		}
@@ -196,7 +196,7 @@ func (n *NetEnv) emitSystemEvent(kind SystemEventKind, detail string) {
 	}
 }
 
-func (n *NetEnv) GetNetworkInfo() winapi.NetworkInfo {
+func (n *NetEnv) GetNetworkInfo() platform.NetworkInfo {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
 	return n.currentInfo

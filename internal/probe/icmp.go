@@ -4,7 +4,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/aaronburt/netscan/internal/winapi"
+	"github.com/aaronburt/netscan/internal/platform"
 )
 
 func ProbeICMP(target Target, timeout time.Duration, seq uint64) ProbeResult {
@@ -26,7 +26,7 @@ func ProbeICMP(target Target, timeout time.Duration, seq uint64) ProbeResult {
 		}
 	}
 
-	echoRes, err := winapi.SendEcho(ip, target.TTL, timeout, seq)
+	echoRes, err := platform.SendEcho(ip, target.TTL, timeout, seq)
 	if err != nil {
 		return ProbeResult{
 			TargetID:    target.ID,

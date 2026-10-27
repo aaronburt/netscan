@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MIN="${1:-70}"
-PKGS="$(go list ./... | grep -vE '/cmd/|/internal/tray|/internal/winapi|/internal/netenv|/internal/app$')"
+PKGS="$(go list ./... | grep -vE '/cmd/|/internal/tray|/internal/platform|/internal/netenv|/internal/app$')"
 
 go test -coverprofile=coverage.out $PKGS
 TOTAL="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$3); print $3}')"
