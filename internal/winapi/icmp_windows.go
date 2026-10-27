@@ -3,6 +3,7 @@ package winapi
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -209,7 +210,13 @@ func SendEcho(ip net.IP, ttl byte, timeout time.Duration, seq uint64) (EchoResul
 			result.ErrorMessage = "unreachable"
 			return result, nil
 		}
-		result.ErrorMessage = callErr.Error()
+		if reply.Status == IPReqTimedOut {
+			result.ErrorMessage = "timeout"
+			return result, nil
+		}
+		// The call succeeded, so callErr is whatever GetLastError held from
+		// earlier and says nothing about this reply. Report the status.
+		result.ErrorMessage = fmt.Sprintf("icmp reply status %d", reply.Status)
 		return result, nil
 	}
 

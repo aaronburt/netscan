@@ -114,3 +114,23 @@ func TestGenerateISPReport(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestISPReportKeepsBlipsOutOfISPIncidents(t *testing.T) {
+	var buf bytes.Buffer
+	dur := int64(0)
+	events := []detector.Event{{
+		ID: 1, Kind: detector.EventKindBlip, Classification: detector.ClassICMPFiltered,
+		StartMS: 1_700_000_100_000, LayersDown: detector.LayerMaskWANICMP, DurationMS: &dur, GatewayOKPct: 100,
+	}}
+	meta := export.ExportMeta{FromMS: 1_700_000_000_000, ToMS: 1_700_600_000_000}
+	if err := export.GenerateISPReport(&buf, meta, events, store.StatsSummary{Blips7D: 1}, "gw", "hop"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "No upstream ISP-attributable outages recorded") {
+		t.Fatalf("blip was listed as an ISP incident:\n%s", out)
+	}
+	if !strings.Contains(out, "BRIEF PROBE FAILURES") || !strings.Contains(out, "ICMP") {
+		t.Fatalf("blip section missing:\n%s", out)
+	}
+}

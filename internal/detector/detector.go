@@ -39,6 +39,7 @@ type Detector struct {
 	firstFailInDegraded *probe.ProbeResult
 	lastFailInDegraded  *probe.ProbeResult
 	anyFailInDegraded   bool
+	failedMask          int
 
 	postResumeUntil time.Time
 	isVPN           bool
@@ -188,6 +189,7 @@ func (d *Detector) ProcessProbe(res probe.ProbeResult) (probe.ProbeResult, *Even
 		}
 		d.lastFailInDegraded = &res
 		d.anyFailInDegraded = true
+		d.failedMask |= layerMask(res.Target.Layer)
 	}
 
 	d.evaluateLayers(now)
@@ -474,6 +476,26 @@ func (d *Detector) clearFailTracking() {
 	d.firstFailInDegraded = nil
 	d.lastFailInDegraded = nil
 	d.anyFailInDegraded = false
+	d.failedMask = 0
+}
+
+// layerMask is the event bitmask bit for a probe layer.
+func layerMask(l probe.Layer) int {
+	switch l {
+	case probe.LayerGateway:
+		return LayerMaskGateway
+	case probe.LayerISPHop:
+		return LayerMaskISPEdge
+	case probe.LayerWANICMP:
+		return LayerMaskWANICMP
+	case probe.LayerWANTCP:
+		return LayerMaskWANTCP
+	case probe.LayerDNS:
+		return LayerMaskDNS
+	case probe.LayerHTTP:
+		return LayerMaskHTTP
+	}
+	return 0
 }
 
 func (d *Detector) switchFastMode(fast bool) {
@@ -507,25 +529,29 @@ func (d *Detector) updateActiveLayersBitmask() {
 }
 
 func (d *Detector) classify() Classification {
-	if (d.activeLayers & LayerMaskLink) != 0 {
+	return classifyMask(d.activeLayers)
+}
+
+func classifyMask(layers int) Classification {
+	if (layers & LayerMaskLink) != 0 {
 		return ClassLinkDown
 	}
-	if (d.activeLayers & LayerMaskGateway) != 0 {
+	if (layers & LayerMaskGateway) != 0 {
 		return ClassGateway
 	}
-	if (d.activeLayers&LayerMaskWANICMP) != 0 && (d.activeLayers&LayerMaskWANTCP) != 0 {
-		if (d.activeLayers & LayerMaskISPEdge) != 0 {
+	if (layers&LayerMaskWANICMP) != 0 && (layers&LayerMaskWANTCP) != 0 {
+		if (layers & LayerMaskISPEdge) != 0 {
 			return ClassISPEdge
 		}
 		return ClassWAN
 	}
-	if (d.activeLayers&LayerMaskWANICMP) != 0 && (d.activeLayers&LayerMaskWANTCP) == 0 {
+	if (layers&LayerMaskWANICMP) != 0 && (layers&LayerMaskWANTCP) == 0 {
 		return ClassICMPFiltered
 	}
-	if (d.activeLayers & LayerMaskDNS) != 0 {
+	if (layers & LayerMaskDNS) != 0 {
 		return ClassDNSAll
 	}
-	if (d.activeLayers & LayerMaskHTTP) != 0 {
+	if (layers & LayerMaskHTTP) != 0 {
 		return ClassHTTP
 	}
 	return ClassWAN
@@ -652,6 +678,12 @@ func (d *Detector) computeEventReachability(evt *Event) {
 	}
 }
 
+// createBlipEvent records a short failure that never met the outage rule.
+//
+// It ends at the last failed probe, not at the end of the recovery hold, so
+// the duration is how long probes were failing and not how long it took
+// three good ticks to confirm they stopped. The failed layers are recorded so
+// the dashboard can say what actually failed.
 func (d *Detector) createBlipEvent(now time.Time) *Event {
 	id := d.nextEventID
 	d.nextEventID++
@@ -660,12 +692,19 @@ func (d *Detector) createBlipEvent(now time.Time) *Event {
 	if d.firstFailInDegraded != nil {
 		startMS = d.firstFailInDegraded.SendTimeUTC
 	}
-	endMS := now.UnixMilli()
+	endMS := startMS
+	if d.lastFailInDegraded != nil {
+		endMS = d.lastFailInDegraded.SendTimeUTC
+	}
 	durationMS := endMS - startMS
 	if durationMS < 0 {
 		durationMS = 0
 	}
-	uncert := int64(1000)
+	startUncert := int64(1000)
+	endUncert := now.UnixMilli() - endMS
+	if endUncert < 0 {
+		endUncert = 0
+	}
 
 	flags := 0
 	if now.Before(d.postResumeUntil) {
@@ -678,17 +717,17 @@ func (d *Detector) createBlipEvent(now time.Time) *Event {
 	evt := &Event{
 		ID:             id,
 		Kind:           EventKindBlip,
-		Classification: ClassWAN,
+		Classification: classifyMask(d.failedMask),
 		NetworkID:      d.networkID,
 		StartMS:        startMS,
-		StartUncertMS:  uncert,
+		StartUncertMS:  startUncert,
 		EndMS:          &endMS,
-		EndUncertMS:    &uncert,
+		EndUncertMS:    &endUncert,
 		DurationMS:     &durationMS,
-		LayersDown:     0,
+		LayersDown:     d.failedMask,
 		Flags:          flags,
-		GatewayOKPct:   100.0,
 	}
+	d.computeEventReachability(evt)
 	d.lastEvent = evt
 	return evt
 }
