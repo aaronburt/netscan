@@ -48,10 +48,7 @@ func AcquireSingleInstance(name string) (*MutexHandle, bool, error) {
 }
 
 func lockPath(name string) string {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = os.TempDir()
-	}
+	dir := runtimeDir(os.Getenv)
 	safe := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
@@ -60,6 +57,19 @@ func lockPath(name string) string {
 		return '_'
 	}, name)
 	return filepath.Join(dir, safe+".lock")
+}
+
+// runtimeDir picks where the lock file goes. A system service has no
+// XDG_RUNTIME_DIR, but systemd's RuntimeDirectory= sets RUNTIME_DIRECTORY.
+func runtimeDir(getenv func(string) string) string {
+	if dir := getenv("RUNTIME_DIRECTORY"); dir != "" {
+		// systemd may list several directories separated by a colon.
+		return strings.SplitN(dir, ":", 2)[0]
+	}
+	if dir := getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	return os.TempDir()
 }
 
 func AttachConsoleToParent() bool { return false }

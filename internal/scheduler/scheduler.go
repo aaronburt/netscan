@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aaronburt/netscan/internal/config"
+	"github.com/aaronburt/netscan/internal/platform"
 	"github.com/aaronburt/netscan/internal/probe"
 )
 
@@ -81,9 +82,14 @@ const gapSlack = 3 * time.Second
 // pacer keeps ticks on a fixed grid so probes don't drift, and spots
 // wall-clock gaps such as a suspend. The grid restarts whenever the interval
 // changes or monitoring resumes from a pause.
+//
+// The pacer works on a clock reading (time since boot) rather than wall time,
+// so a post-boot NTP step on a board without an RTC is not mistaken for a
+// suspend. The reading must keep counting through a suspend, or real gaps
+// would go unnoticed.
 type pacer struct {
-	start    time.Time
-	lastTick time.Time
+	start    time.Duration
+	lastTick time.Duration
 	tick     int64
 	interval time.Duration
 	synced   bool
@@ -96,10 +102,10 @@ func (p *pacer) reset() {
 
 // step is called once per tick. It returns how long to wait before the next
 // tick and, if this tick came much later than expected, how long the gap was.
-func (p *pacer) step(now time.Time, interval time.Duration) (wait, gap time.Duration) {
+func (p *pacer) step(now, interval time.Duration) (wait, gap time.Duration) {
 	if p.synced {
 		expected := max(interval, p.interval)
-		if d := now.Sub(p.lastTick); d > expected+gapSlack {
+		if d := now - p.lastTick; d > expected+gapSlack {
 			gap = d
 			p.synced = false
 		} else if interval != p.interval {
@@ -115,13 +121,13 @@ func (p *pacer) step(now time.Time, interval time.Duration) (wait, gap time.Dura
 	p.lastTick = now
 
 	p.tick++
-	next := p.start.Add(time.Duration(p.tick) * interval)
-	if now.Sub(next) > interval {
+	next := p.start + time.Duration(p.tick)*interval
+	if now-next > interval {
 		// We fell behind; skip the ticks we missed instead of bursting.
-		p.tick = int64(now.Sub(p.start)/interval) + 1
-		next = p.start.Add(time.Duration(p.tick) * interval)
+		p.tick = int64((now-p.start)/interval) + 1
+		next = p.start + time.Duration(p.tick)*interval
 	}
-	return next.Sub(now), gap
+	return next - now, gap
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -152,7 +158,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		interval := time.Duration(intervalMS) * time.Millisecond
 
-		wait, gap := p.step(time.Now(), interval)
+		wait, gap := p.step(platform.BootElapsed(), interval)
 		if gap > 0 && s.onGap != nil {
 			s.onGap(gap)
 		}

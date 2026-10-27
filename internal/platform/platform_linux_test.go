@@ -152,3 +152,22 @@ func TestSendEchoRejectsIPv6(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestRuntimeDirPrefersSystemdThenXDG(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"systemd", map[string]string{"RUNTIME_DIRECTORY": "/run/netscan", "XDG_RUNTIME_DIR": "/run/user/1000"}, "/run/netscan"},
+		{"systemd multiple", map[string]string{"RUNTIME_DIRECTORY": "/run/netscan:/run/other"}, "/run/netscan"},
+		{"xdg", map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"}, "/run/user/1000"},
+		{"neither", nil, os.TempDir()},
+	}
+	for _, c := range cases {
+		got := runtimeDir(func(k string) string { return c.env[k] })
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
