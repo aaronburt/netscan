@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/probe"
 	"github.com/miekg/dns"
 )
@@ -179,5 +180,54 @@ func TestProbeICMPLoopback(t *testing.T) {
 	res := probe.ProbeICMP(target, 1*time.Second, 1)
 	if !res.Reached || !res.OK {
 		t.Logf("ICMP loopback returned reached=%v ok=%v err=%s err_text=%s", res.Reached, res.OK, res.ErrCode, res.ErrText)
+	}
+}
+
+func TestReconfigureKeepsIDsAndDiscoveredTargets(t *testing.T) {
+	std := config.Standard()
+	reg := probe.NewTargetRegistry(std)
+	reg.SetGateway(net.ParseIP("192.168.1.1"))
+	reg.SetISPHop(net.ParseIP("10.0.0.1"), 2)
+	reg.UpdateSystemResolvers([]string{"192.168.1.1"})
+	before := map[string]int{}
+	for _, tg := range reg.GetAllTargets() {
+		before[tg.Address] = tg.ID
+	}
+
+	next := config.Standard()
+	next.Targets.WANICMP = []string{"9.9.9.9", "1.1.1.1"} // reordered, one dropped
+	next.Targets.DNSQueryName = "example.com"
+	all := reg.Reconfigure(next)
+
+	if len(all) != len(reg.GetAllTargets()) {
+		t.Fatalf("returned %d targets, registry holds %d", len(all), len(reg.GetAllTargets()))
+	}
+	for _, tg := range reg.GetWANICMP() {
+		if tg.ID != before[tg.Address] {
+			t.Errorf("%s changed id from %d to %d", tg.Address, before[tg.Address], tg.ID)
+		}
+	}
+	if len(reg.GetWANICMP()) != 2 {
+		t.Errorf("got %d ping hosts, want 2", len(reg.GetWANICMP()))
+	}
+	if reg.GetGateway() == nil || reg.GetISPHop() == nil {
+		t.Error("gateway and ISP hop should survive a switch")
+	}
+	var sys bool
+	for _, tg := range reg.GetDNS() {
+		if tg.Label == "System DNS (192.168.1.1)" {
+			sys = true
+		}
+	}
+	if !sys {
+		t.Error("system resolver was lost")
+	}
+	if reg.GetDNSQueryName() != "example.com" {
+		t.Errorf("dns query name = %q", reg.GetDNSQueryName())
+	}
+	for _, tg := range reg.GetAllTargets() {
+		if tg.Address == "8.8.8.8" && tg.Layer == probe.LayerWANICMP {
+			t.Error("dropped host is still registered")
+		}
 	}
 }

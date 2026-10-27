@@ -38,7 +38,8 @@ jobs:
 
       - name: Smoke test binary
         shell: bash
-        run: scripts/smoke.sh "$PWD/netscan.exe"
+        run: |
+          for p in standard aggressive lax; do scripts/smoke.sh "$PWD/netscan.exe" "$p"; done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -88,4 +89,5 @@ jobs:
         run: go build -v -tags notray -o netscan ./cmd/netscan
 
       - name: Smoke test binary
-        run: bash scripts/smoke.sh "$PWD/netscan"
+        run: |
+          for p in standard aggressive lax; do bash scripts/smoke.sh "$PWD/netscan" "$p"; done
