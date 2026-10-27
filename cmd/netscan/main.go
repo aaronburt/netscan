@@ -194,6 +194,11 @@ func main() {
 	if err != nil {
 		logger.Warn("loaded config with fallback defaults", "error", err)
 	}
+	for _, w := range cfg.LoadWarnings {
+		logger.Warn("config", "warning", w)
+	}
+	profile := cfg.Active()
+	logger.Info("polling profile", "id", profile.ID, "name", profile.Name, "mode", profile.Mode)
 
 	dbPath := config.DBPath()
 	db, err := store.OpenDB(dbPath)
@@ -230,7 +235,7 @@ func main() {
 	if err != nil {
 		logger.Warn("could not read known targets", "error", err)
 	}
-	registry := probe.NewTargetRegistryWithIDs(cfg, probe.NewIDAllocator(known))
+	registry := probe.NewTargetRegistryWithIDs(profile, probe.NewIDAllocator(known))
 
 	for _, t := range registry.GetAllTargets() {
 		storeWriter.QueueTarget(t)
@@ -242,7 +247,7 @@ func main() {
 	h := hub.NewHub()
 
 	var sched *scheduler.Scheduler
-	det := detector.NewDetector(cfg, nil, func(fast bool) {
+	det := detector.NewDetector(cfg, profile, nil, func(fast bool) {
 		if sched != nil {
 			sched.SetFastMode(fast)
 		}
@@ -254,7 +259,7 @@ func main() {
 	}
 
 	probeOutCh := make(chan probe.ProbeResult, 1024)
-	sched = scheduler.NewScheduler(cfg, registry, probeOutCh, version, func(gap time.Duration) {
+	sched = scheduler.NewScheduler(profile, registry, probeOutCh, version, func(gap time.Duration) {
 		logger.Warn("scheduler gap detected", "gap", gap)
 		sysEventCh <- netenv.SystemEvent{
 			Timestamp: time.Now().UTC().UnixMilli(),
@@ -331,7 +336,7 @@ func main() {
 	})
 
 	supervisor.Run("probe_processor", func(ctx context.Context) error {
-		tickInterval := time.Duration(cfg.Intervals.NormalMS) * time.Millisecond
+		tickInterval := time.Duration(profile.Intervals.NormalMS) * time.Millisecond
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
 

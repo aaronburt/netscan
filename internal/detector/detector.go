@@ -14,6 +14,7 @@ import (
 type Detector struct {
 	lock           sync.Mutex
 	cfg            config.Config
+	profile        config.Profile
 	clock          Clock
 	latencyTracker *LatencyTracker
 
@@ -51,12 +52,13 @@ type Detector struct {
 	onFastModeChange func(fast bool)
 }
 
-func NewDetector(cfg config.Config, clock Clock, onFastModeChange func(bool)) *Detector {
+func NewDetector(cfg config.Config, profile config.Profile, clock Clock, onFastModeChange func(bool)) *Detector {
 	if clock == nil {
 		clock = RealClock{}
 	}
 	return &Detector{
 		cfg:              cfg,
+		profile:          profile,
 		clock:            clock,
 		latencyTracker:   NewLatencyTracker(cfg.Latency),
 		state:            StateHealthy,
@@ -222,19 +224,19 @@ func (d *Detector) freshness(layer probe.Layer) time.Duration {
 	var timeoutMS int
 	switch layer {
 	case probe.LayerWANTCP:
-		timeoutMS = d.cfg.TimeoutsMS.TCP
+		timeoutMS = d.profile.TimeoutsMS.TCP
 	case probe.LayerDNS:
-		timeoutMS = d.cfg.TimeoutsMS.DNS
+		timeoutMS = d.profile.TimeoutsMS.DNS
 	case probe.LayerHTTP:
-		timeoutMS = d.cfg.TimeoutsMS.HTTP
+		timeoutMS = d.profile.TimeoutsMS.HTTP
 	default:
-		tick := d.cfg.Intervals.NormalMS
+		tick := d.profile.Intervals.NormalMS
 		if d.fastMode {
-			tick = d.cfg.Intervals.FastMS
+			tick = d.profile.Intervals.FastMS
 		}
 		return 3 * time.Duration(tick) * time.Millisecond
 	}
-	return 3*time.Duration(d.cfg.Intervals.NormalMS)*time.Millisecond + 2*time.Duration(timeoutMS)*time.Millisecond
+	return 3*time.Duration(d.profile.Intervals.NormalMS)*time.Millisecond + 2*time.Duration(timeoutMS)*time.Millisecond
 }
 
 // minEvidence is how many fresh results a layer needs before it can be
@@ -246,13 +248,13 @@ func (d *Detector) minEvidence(layer probe.Layer) int {
 	var configured int
 	switch layer {
 	case probe.LayerWANICMP:
-		configured = len(d.cfg.Targets.WANICMP)
+		configured = len(d.profile.Targets.WANICMP)
 	case probe.LayerWANTCP:
-		configured = len(d.cfg.Targets.WANTCP)
+		configured = len(d.profile.Targets.WANTCP)
 	case probe.LayerDNS:
-		configured = len(d.cfg.Targets.DNS)
+		configured = len(d.profile.Targets.DNS)
 	case probe.LayerHTTP:
-		configured = len(d.cfg.Targets.HTTP)
+		configured = len(d.profile.Targets.HTTP)
 	}
 	return max(1, min(2, configured))
 }

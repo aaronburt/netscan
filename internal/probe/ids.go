@@ -42,7 +42,7 @@ func NewIDAllocator(known []KnownTarget) *IDAllocator {
 		next:     overflowIDBase,
 	}
 
-	def := config.DefaultConfig().Targets
+	def := config.Standard().Targets
 	for i, addr := range def.WANICMP {
 		a.defaults[idKey{LayerWANICMP, addr}] = wanICMPIDBase + i
 	}

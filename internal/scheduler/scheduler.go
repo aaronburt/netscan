@@ -12,7 +12,7 @@ import (
 )
 
 type Scheduler struct {
-	cfg        config.Config
+	profile    config.Profile
 	registry   *probe.TargetRegistry
 	outCh      chan probe.ProbeResult
 	fastMode   atomic.Bool
@@ -33,9 +33,9 @@ type Scheduler struct {
 	onGap func(gapDuration time.Duration)
 }
 
-func NewScheduler(cfg config.Config, registry *probe.TargetRegistry, outCh chan probe.ProbeResult, version string, onGap func(time.Duration)) *Scheduler {
+func NewScheduler(profile config.Profile, registry *probe.TargetRegistry, outCh chan probe.ProbeResult, version string, onGap func(time.Duration)) *Scheduler {
 	return &Scheduler{
-		cfg:      cfg,
+		profile:  profile,
 		registry: registry,
 		outCh:    outCh,
 		inFlight: make(map[int]*atomic.Int32),
@@ -152,9 +152,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 
 		isFast := s.fastMode.Load()
-		intervalMS := s.cfg.Intervals.NormalMS
+		intervalMS := s.profile.Intervals.NormalMS
 		if isFast {
-			intervalMS = s.cfg.Intervals.FastMS
+			intervalMS = s.profile.Intervals.FastMS
 		}
 		interval := time.Duration(intervalMS) * time.Millisecond
 
@@ -199,7 +199,7 @@ func everyN(periodMS int, interval time.Duration) int64 {
 func (s *Scheduler) planTick(isFast bool, interval time.Duration) tickPlan {
 	tick := s.ticks
 	s.ticks++
-	iv := s.cfg.Intervals
+	iv := s.profile.Intervals
 	due := func(periodMS int) bool { return tick%everyN(periodMS, interval) == 0 }
 
 	var plan tickPlan
@@ -355,13 +355,13 @@ func (s *Scheduler) run(ctx context.Context, t probe.Target, isFast, confirming 
 	var res probe.ProbeResult
 	switch t.Layer {
 	case probe.LayerGateway, probe.LayerISPHop, probe.LayerWANICMP:
-		res = probe.ProbeICMP(t, time.Duration(s.cfg.TimeoutsMS.ICMP)*time.Millisecond, seq)
+		res = probe.ProbeICMP(t, time.Duration(s.profile.TimeoutsMS.ICMP)*time.Millisecond, seq)
 	case probe.LayerWANTCP:
-		res = probe.ProbeTCP(t, time.Duration(s.cfg.TimeoutsMS.TCP)*time.Millisecond, seq)
+		res = probe.ProbeTCP(t, time.Duration(s.profile.TimeoutsMS.TCP)*time.Millisecond, seq)
 	case probe.LayerDNS:
-		res = probe.ProbeDNS(t, s.registry.GetDNSQueryName(), time.Duration(s.cfg.TimeoutsMS.DNS)*time.Millisecond, seq)
+		res = probe.ProbeDNS(t, s.registry.GetDNSQueryName(), time.Duration(s.profile.TimeoutsMS.DNS)*time.Millisecond, seq)
 	case probe.LayerHTTP:
-		res = probe.ProbeHTTP(t, time.Duration(s.cfg.TimeoutsMS.HTTP)*time.Millisecond, seq, s.version)
+		res = probe.ProbeHTTP(t, time.Duration(s.profile.TimeoutsMS.HTTP)*time.Millisecond, seq, s.version)
 	default:
 		return
 	}

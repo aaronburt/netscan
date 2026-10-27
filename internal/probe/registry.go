@@ -43,18 +43,18 @@ type TargetRegistry struct {
 // NewTargetRegistry builds a registry with no id history, as for a new
 // database. Use NewTargetRegistryWithIDs when a database may already hold
 // targets.
-func NewTargetRegistry(cfg config.Config) *TargetRegistry {
-	return NewTargetRegistryWithIDs(cfg, NewIDAllocator(nil))
+func NewTargetRegistry(p config.Profile) *TargetRegistry {
+	return NewTargetRegistryWithIDs(p, NewIDAllocator(nil))
 }
 
-func NewTargetRegistryWithIDs(cfg config.Config, ids *IDAllocator) *TargetRegistry {
+func NewTargetRegistryWithIDs(p config.Profile, ids *IDAllocator) *TargetRegistry {
 	r := &TargetRegistry{
 		allTargets:   make(map[int]Target),
 		ids:          ids,
-		dnsQueryName: cfg.Targets.DNSQueryName,
+		dnsQueryName: p.Targets.DNSQueryName,
 	}
 
-	for _, addr := range cfg.Targets.WANICMP {
+	for _, addr := range p.Targets.WANICMP {
 		id := r.ids.ID(LayerWANICMP, addr, 0)
 		if _, dup := r.allTargets[id]; dup {
 			continue
@@ -69,7 +69,7 @@ func NewTargetRegistryWithIDs(cfg config.Config, ids *IDAllocator) *TargetRegist
 		r.allTargets[id] = t
 	}
 
-	for _, addr := range cfg.Targets.WANTCP {
+	for _, addr := range p.Targets.WANTCP {
 		id := r.ids.ID(LayerWANTCP, addr, 0)
 		if _, dup := r.allTargets[id]; dup {
 			continue
@@ -84,7 +84,7 @@ func NewTargetRegistryWithIDs(cfg config.Config, ids *IDAllocator) *TargetRegist
 		r.allTargets[id] = t
 	}
 
-	for _, addr := range cfg.Targets.DNS {
+	for _, addr := range p.Targets.DNS {
 		id := r.ids.ID(LayerDNS, addr, 0)
 		if _, dup := r.allTargets[id]; dup {
 			continue
@@ -99,7 +99,7 @@ func NewTargetRegistryWithIDs(cfg config.Config, ids *IDAllocator) *TargetRegist
 		r.allTargets[id] = t
 	}
 
-	for _, h := range cfg.Targets.HTTP {
+	for _, h := range p.Targets.HTTP {
 		id := r.ids.ID(LayerHTTP, h.URL, 0)
 		if _, dup := r.allTargets[id]; dup {
 			continue

@@ -24,11 +24,12 @@ func (m *MockClock) Advance(d time.Duration) {
 
 func setupDetector(clock *MockClock) (*detector.Detector, *bool) {
 	cfg := config.DefaultConfig()
-	cfg.Intervals.NormalMS = 1000
-	cfg.Intervals.FastMS = 500
+	prof := config.Standard()
+	prof.Intervals.NormalMS = 1000
+	prof.Intervals.FastMS = 500
 
 	fastMode := false
-	d := detector.NewDetector(cfg, clock, func(fast bool) {
+	d := detector.NewDetector(cfg, prof, clock, func(fast bool) {
 		fastMode = fast
 	})
 	d.SetNetworkContext(1, false, "192.168.1.1", "10.0.0.1", "HomeWiFi")
@@ -381,10 +382,10 @@ func TestHTTPTimeoutStillCounts(t *testing.T) {
 
 // With a single configured target there's nobody to confirm against.
 func TestSingleConfiguredTargetCanGoDown(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Targets.DNS = []string{"1.1.1.1:53"}
+	prof := config.Standard()
+	prof.Targets.DNS = []string{"1.1.1.1:53"}
 	clock := &MockClock{curr: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
-	d := detector.NewDetector(cfg, clock, nil)
+	d := detector.NewDetector(config.DefaultConfig(), prof, clock, nil)
 
 	d.ProcessProbe(makeProbe(30, probe.LayerDNS, false, clock))
 	if got := d.GetSnapshot().LayerStatuses[probe.LayerDNS]; got != detector.LayerStatusDown {

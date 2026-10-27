@@ -9,12 +9,12 @@ import (
 )
 
 func TestRegistryIDsStayUniqueWithManyTargets(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Targets.WANICMP = nil
+	prof := config.Standard()
+	prof.Targets.WANICMP = nil
 	for i := 0; i < 12; i++ {
-		cfg.Targets.WANICMP = append(cfg.Targets.WANICMP, fmt.Sprintf("10.0.0.%d", i+1))
+		prof.Targets.WANICMP = append(prof.Targets.WANICMP, fmt.Sprintf("10.0.0.%d", i+1))
 	}
-	r := probe.NewTargetRegistry(cfg)
+	r := probe.NewTargetRegistry(prof)
 
 	seen := map[int]probe.Target{}
 	for _, t2 := range r.GetAllTargets() {
@@ -33,7 +33,7 @@ func TestRegistryIDsStayUniqueWithManyTargets(t *testing.T) {
 }
 
 func TestSystemResolversReplaceOldOnes(t *testing.T) {
-	r := probe.NewTargetRegistry(config.DefaultConfig())
+	r := probe.NewTargetRegistry(config.Standard())
 	r.UpdateSystemResolvers([]string{"192.168.1.1", "fec0:0:0:ffff::1", "1.1.1.1"})
 	if got := len(r.GetDNS()); got != 5 { // 3 configured + 2 new (1.1.1.1 is a duplicate)
 		t.Fatalf("got %d DNS targets after first update, want 5", got)
