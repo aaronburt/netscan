@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 type HTTPTargetConfig struct {
@@ -319,12 +321,33 @@ func (c *Config) ValidateAndApplyMinimums() {
 }
 
 func DataDir() string {
-	if dir := os.Getenv("NETSCAN_DATA_DIR"); dir != "" {
+	return dataDir(runtime.GOOS, os.Getenv, os.UserHomeDir)
+}
+
+// dataDir resolves the data directory. NETSCAN_DATA_DIR always wins. On Linux
+// the order continues with STATE_DIRECTORY (set by systemd's StateDirectory=),
+// then XDG_DATA_HOME, then ~/.local/share.
+func dataDir(goos string, getenv func(string) string, homeDir func() (string, error)) string {
+	if dir := getenv("NETSCAN_DATA_DIR"); dir != "" {
 		return dir
 	}
-	appData := os.Getenv("LOCALAPPDATA")
+	if goos != "windows" {
+		if dir := getenv("STATE_DIRECTORY"); dir != "" {
+			// systemd may list several directories separated by a colon.
+			return strings.SplitN(dir, ":", 2)[0]
+		}
+		if dir := getenv("XDG_DATA_HOME"); dir != "" {
+			return filepath.Join(dir, "netscan")
+		}
+		home, err := homeDir()
+		if err != nil {
+			return ".netscan"
+		}
+		return filepath.Join(home, ".local", "share", "netscan")
+	}
+	appData := getenv("LOCALAPPDATA")
 	if appData == "" {
-		home, err := os.UserHomeDir()
+		home, err := homeDir()
 		if err != nil {
 			return ".netscan"
 		}
