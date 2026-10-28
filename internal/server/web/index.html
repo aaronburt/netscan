@@ -23,6 +23,13 @@
       </div>
       <div class="tools">
         <span class="tag" id="net-label">Ethernet</span>
+        <label class="profile-chip">
+          <span>Profile</span>
+          <select id="profile-select" disabled>
+            <option>Loading...</option>
+          </select>
+          <span class="pill warn" id="profile-warn" hidden>Extra traffic</span>
+        </label>
         <button class="btn{{UPDATES_HIDDEN}}" id="btn-update-menu" type="button">
           <span class="update-dot hidden" id="update-dot"></span>
           <span id="btn-update-text">Updates</span>
@@ -66,6 +73,20 @@
       <div class="card-b">
         <div class="legend" id="legend"></div>
         <div id="chart"></div>
+      </div>
+    </section>
+
+    <section id="profiles" class="card" aria-labelledby="h-profiles">
+      <div class="card-h">
+        <h2 id="h-profiles">Polling profiles</h2>
+        <p>How often each layer is probed. A switch applies on the next probe.</p>
+      </div>
+      <div class="card-b">
+        <div class="profile-grid" id="profile-grid"></div>
+        <div class="profile-foot">
+          <p class="profile-msg" id="profile-msg" role="status"></p>
+          <button class="btn" id="profile-reload" type="button" title="Apply edits made to config.json by hand">Reload config.json</button>
+        </div>
       </div>
     </section>
 
@@ -131,6 +152,7 @@
           </select>
         </div>
       </div>
+      <p class="note profile-banner" id="profile-banner" hidden></p>
       <div class="tbl-wrap">
         <table>
           <thead id="thead"></thead>
