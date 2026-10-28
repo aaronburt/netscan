@@ -456,6 +456,10 @@ func (s *Scheduler) emitSkipped(t probe.Target, isFast bool) {
 	s.sendResult(res)
 }
 
+// icmpUnavailable reports why echo requests can't be sent here, or nil. It is
+// a variable so tests can simulate a host without ICMP.
+var icmpUnavailable = platform.ICMPUnavailable
+
 // run probes one target and reports the result. In normal mode a failure
 // is followed straight away by one probe of another target in the same
 // layer, so one failed probe is never the only evidence; the detector waits
@@ -466,6 +470,11 @@ func (s *Scheduler) run(ctx context.Context, t probe.Target, isFast, confirming 
 	var res probe.ProbeResult
 	switch t.Layer {
 	case probe.LayerGateway, probe.LayerISPHop, probe.LayerWANICMP:
+		// Without echo requests a ping says nothing about the network, so the
+		// layer stays unknown instead of being reported as failed.
+		if icmpUnavailable() != nil {
+			return
+		}
 		res = probe.ProbeICMP(t, time.Duration(prof.TimeoutsMS.ICMP)*time.Millisecond, seq)
 	case probe.LayerWANTCP:
 		res = probe.ProbeTCP(t, time.Duration(prof.TimeoutsMS.TCP)*time.Millisecond, seq)

@@ -31,6 +31,9 @@ func SetAutostart(enabled bool) error { return errUnsupported }
 
 func IsAutostartEnabled() bool { return false }
 
+// ICMPUnavailable reports that echo requests can't be sent on this platform.
+func ICMPUnavailable() error { return errUnsupported }
+
 func SendEcho(ip net.IP, ttl byte, timeout time.Duration, seq uint64) (EchoResult, error) {
 	return EchoResult{}, errUnsupported
 }

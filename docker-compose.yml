@@ -1,0 +1,33 @@
+# NetScan in a container, for a Linux host such as a Raspberry Pi.
+#
+#   docker compose up -d --build                 build from this checkout
+#   docker compose pull && docker compose up -d  run the published image
+#
+# The dashboard listens on 127.0.0.1:9095 on the host. From another machine,
+# tunnel to it: ssh -L 9095:127.0.0.1:9095 <host>
+services:
+  netscan:
+    image: ghcr.io/aaronburt/netscan:latest
+    build: .
+    container_name: netscan
+    restart: unless-stopped
+    # Host networking gives NetScan the host's routes, gateway, ARP table and
+    # interfaces. On a bridge network it would monitor Docker's gateway instead.
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - netscan-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  netscan-data:

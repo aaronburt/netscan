@@ -28,6 +28,27 @@ const (
 	rawNetwork  = "ip4:icmp"
 )
 
+var (
+	icmpCheck    sync.Once
+	icmpCheckErr error
+)
+
+// ICMPUnavailable returns nil when this process can send echo requests, and
+// otherwise why it can't: there is neither a raw socket (root or CAP_NET_RAW)
+// nor a ping socket (net.ipv4.ping_group_range must include the process's
+// group). The check runs once.
+func ICMPUnavailable() error {
+	icmpCheck.Do(func() {
+		c, _, err := listenICMP()
+		if err != nil {
+			icmpCheckErr = err
+			return
+		}
+		_ = c.Close()
+	})
+	return icmpCheckErr
+}
+
 // listenICMP opens a raw socket when the process may (root or CAP_NET_RAW)
 // and otherwise falls back to an unprivileged ping socket, which needs the
 // net.ipv4.ping_group_range sysctl to include the process's group. The

@@ -130,6 +130,17 @@ func ShouldRunHeadless(goos string, getenv func(string) string) bool {
 	return goos == "linux" && getenv("DISPLAY") == "" && getenv("WAYLAND_DISPLAY") == ""
 }
 
+// InContainer reports whether NetScan runs inside a container. There the binary
+// cannot replace itself, and updates come from pulling a new image. The image
+// sets NETSCAN_CONTAINER, and setting it to 0 turns detection off. Otherwise
+// the marker files that Docker and Podman create decide.
+func InContainer(getenv func(string) string, exists func(string) bool) bool {
+	if on, err := strconv.ParseBool(getenv("NETSCAN_CONTAINER")); err == nil {
+		return on
+	}
+	return exists("/.dockerenv") || exists("/run/.containerenv")
+}
+
 // SetupLogger returns the app logger. Under a service manager the journal
 // owns log storage and rotation, so logs go to stdout only.
 func SetupLogger(headless, service bool) (*slog.Logger, io.Closer) {

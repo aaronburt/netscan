@@ -33,9 +33,12 @@ type StatusResponse struct {
 	BytesTotal      int64       `json:"bytes_total"`
 	Error           string      `json:"error,omitempty"`
 	LastCheckedMS   int64       `json:"last_checked_ms,omitempty"`
-	// CanApply is false when the install directory isn't writable, so the
-	// dashboard offers a link to the release instead of an install button.
+	// CanApply is false when the install directory isn't writable or NetScan
+	// runs in a container, so the dashboard offers no install button.
 	CanApply bool `json:"can_apply"`
+	// Container is true in a container, where updates come from pulling a new
+	// image. The dashboard hides its update menu then.
+	Container bool `json:"container"`
 }
 
 type Manager struct {
@@ -56,6 +59,7 @@ type Manager struct {
 	lastCheckedMS    int64
 	httpClient       *http.Client
 	canApply         bool
+	container        bool
 	supervised       bool
 }
 
@@ -83,6 +87,14 @@ func (m *Manager) SetOnStatusChange(fn func(StatusResponse)) {
 	m.onStatusChange = fn
 }
 
+// SetContainer records that NetScan runs in a container. The binary cannot
+// replace itself there, so updates are offered only as a new image.
+func (m *Manager) SetContainer(in bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.container = in
+}
+
 func (m *Manager) Status() StatusResponse {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -103,7 +115,8 @@ func (m *Manager) Status() StatusResponse {
 		BytesTotal:      m.bytesTotal,
 		Error:           m.lastError,
 		LastCheckedMS:   m.lastCheckedMS,
-		CanApply:        m.canApply,
+		CanApply:        m.canApply && !m.container,
+		Container:       m.container,
 	}
 }
 
@@ -153,6 +166,10 @@ func (m *Manager) Check(ctx context.Context) (*CheckResult, error) {
 
 func (m *Manager) Apply(ctx context.Context) error {
 	m.mu.Lock()
+	if m.container {
+		m.mu.Unlock()
+		return errors.New("NetScan runs in a container; pull the new image to update")
+	}
 	if m.state != StateAvailable || m.latestRelease == nil || m.latestRelease.AssetURL == "" {
 		m.mu.Unlock()
 		return errors.New("no update available for download")

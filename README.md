@@ -93,6 +93,30 @@ The service user owns `/opt/netscan`, so the dashboard's **Download & Install** 
 
 To remove it, run `sudo ./uninstall.sh` from the extracted tarball. Your history is kept in `/var/lib/netscan`; add `--purge` to delete it and the `netscan` user too.
 
+## Docker
+
+NetScan also ships as a container image for amd64 and arm64, including a Raspberry Pi 4 or other 64-bit ARM board. The image runs headless as a nonroot user on a distroless base. Run Compose on the host you want to monitor:
+
+```sh
+docker compose up -d --build                  # build from this checkout
+docker compose pull && docker compose up -d   # or run the published image
+```
+
+Published images are at `ghcr.io/aaronburt/netscan`, with a version tag and `latest` on every release.
+
+- **Network:** the Compose file uses host networking, so NetScan sees the host's default gateway, ARP table and interfaces. The gateway checks depend on that. On a bridge network it would see Docker's own gateway instead.
+- **Dashboard:** it listens on `127.0.0.1:9095` on the host. From another machine, open an SSH tunnel with `ssh -L 9095:127.0.0.1:9095 <host>` and browse to http://127.0.0.1:9095 there. The dashboard has no login, so it stays on loopback.
+- **Updates:** the Updates button is hidden in a container, because the image is the update. Run `docker compose pull && docker compose up -d` to move to a new release.
+- **Data:** history and config live in the `netscan-data` volume. To keep them in a host folder, bind-mount it and make it writable by UID 65532: `sudo chown -R 65532:65532 ./data`.
+- **Pings:** gateway and WAN ping checks need unprivileged ping sockets, since the container has no raw-socket rights. Check the host with `sysctl net.ipv4.ping_group_range`. If the range does not include 65532, allow it:
+
+  ```sh
+  echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/99-netscan.conf
+  sudo sysctl --system
+  ```
+
+  Without that, NetScan logs a warning and leaves the gateway and WAN ping layers unknown. Outage detection still uses TCP, DNS and HTTP.
+
 ## Usage
 
 ### Standard Mode (System Tray)
@@ -148,7 +172,7 @@ Every merged PR ships a release automatically. The PR title decides the version 
 - anything else (`fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`, `chore:`, `style:`, `revert:`) bumps the patch version (0.5.0 → 0.5.1)
 - `!` breaking-change markers in a title are rejected: major bumps are never automatic
 
-A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `netscan-linux-amd64.tar.gz`, `netscan-linux-arm64.tar.gz` and `checksums.txt`.
+A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `netscan-linux-amd64.tar.gz`, `netscan-linux-arm64.tar.gz` and `checksums.txt`. After the release exists, the same workflow pushes the container image to `ghcr.io/aaronburt/netscan` for amd64 and arm64, tagged with the version and `latest`.
 
 ### Major release
 

@@ -127,6 +127,9 @@ func (p *ICMPPool) release(h windows.Handle) {
 	}
 }
 
+// ICMPUnavailable is always nil on Windows, where the ICMP API needs no privileges.
+func ICMPUnavailable() error { return nil }
+
 func SendEcho(ip net.IP, ttl byte, timeout time.Duration, seq uint64) (EchoResult, error) {
 	ip4 := ip.To4()
 	if ip4 == nil {
