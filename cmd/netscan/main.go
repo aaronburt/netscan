@@ -284,13 +284,13 @@ func main() {
 		}
 		tickCh <- time.Duration(p.Intervals.NormalMS) * time.Millisecond
 	})
-	reloadProfileOnSignal(logger, *configFlag, profileSwitcher)
-
 	srv, err := server.NewServer(cfg, storeReader, storeWriter, det, h, sched, netEnv, registry, version)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)
 	}
+	srv.SetProfiles(profileSwitcher, *configFlag)
+	reloadProfilesOnSignal(logger, srv.ReloadProfiles)
 	if cfg.HTTP.Enabled {
 		if err := srv.Start(); err != nil {
 			logger.Error("failed to start server", "error", err)

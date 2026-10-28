@@ -24,6 +24,7 @@ import (
 	"github.com/aaronburt/netscan/internal/probe"
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/store"
+	"github.com/aaronburt/netscan/internal/switcher"
 	"github.com/aaronburt/netscan/internal/updater"
 )
 
@@ -47,6 +48,14 @@ type Server struct {
 	server    *http.Server
 	listener  net.Listener
 	lock      sync.Mutex
+
+	// The profile fields are set by SetProfiles. custom mirrors the custom
+	// profiles in config.json and is guarded by lock; profilesMu serialises
+	// changes to them.
+	profiles     *switcher.Switcher
+	profilesPath string
+	custom       []config.Profile
+	profilesMu   sync.Mutex
 }
 
 func NewServer(
@@ -189,7 +198,8 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 
-		if r.Method == http.MethodPost {
+		// Every route that changes state needs the CSRF token.
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			token := r.Header.Get("X-NetScan-Token")
 			if token != s.csrfToken {
 				http.Error(w, "Invalid CSRF token", http.StatusForbidden)
@@ -226,6 +236,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
 	mux.HandleFunc("/api/history/reset", s.handleResetHistory)
+	mux.HandleFunc("/api/profiles", s.handleProfiles)
+	mux.HandleFunc("/api/profiles/validate", s.handleProfilesValidate)
+	mux.HandleFunc("/api/profiles/test-hosts", s.handleProfilesTestHosts)
+	mux.HandleFunc("/api/profiles/reload", s.handleProfilesReload)
+	mux.HandleFunc("/api/profiles/", s.handleProfile)
 }
 
 func (s *Server) handleResetHistory(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +347,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			"is_vpn":      netInfo.IsVPN,
 			"interface":   netInfo.InterfaceName,
 		},
+		"active_profile": s.activeProfileSummary(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

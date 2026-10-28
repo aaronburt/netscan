@@ -1,11 +1,7 @@
 package main
 
-import (
-	"log/slog"
+import "log/slog"
 
-	"github.com/aaronburt/netscan/internal/switcher"
-)
-
-// reloadProfileOnSignal does nothing on Windows, which has no SIGHUP. The
-// profile is read at start; a reload button is added with the profiles API.
-func reloadProfileOnSignal(*slog.Logger, string, *switcher.Switcher) {}
+// reloadProfilesOnSignal does nothing on Windows, which has no SIGHUP. Profiles
+// are read at start and reloaded with POST /api/profiles/reload.
+func reloadProfilesOnSignal(*slog.Logger, func() ([]string, error)) {}
