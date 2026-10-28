@@ -31,6 +31,12 @@ import (
 
 var version = "dev"
 
+// pathExists reports whether path exists. It is passed to app.InContainer.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func init() {
 	runtime.LockOSThread()
 }
@@ -45,6 +51,7 @@ func main() {
 
 	service := app.UnderSystemd(os.Getenv)
 	headless := *headlessFlag || app.ShouldRunHeadless(runtime.GOOS, os.Getenv)
+	inContainer := app.InContainer(os.Getenv, pathExists)
 
 	if *checkUpdateFlag {
 		platform.AttachConsoleToParent()
@@ -75,6 +82,10 @@ func main() {
 
 	if *updateFlag {
 		platform.AttachConsoleToParent()
+		if inContainer {
+			fmt.Fprintln(os.Stderr, "NetScan runs in a container and cannot replace itself. Pull the new image and recreate the container.")
+			os.Exit(1)
+		}
 		cfg, _ := config.LoadConfig(*configFlag)
 		repo := cfg.Update.Repo
 		if repo == "" {
@@ -189,7 +200,10 @@ func main() {
 
 	logger, logCloser := app.SetupLogger(headless, service)
 
-	logger.Info("starting netscan", "version", version, "headless", headless, "service", service)
+	logger.Info("starting netscan", "version", version, "headless", headless, "service", service, "container", inContainer)
+	if err := platform.ICMPUnavailable(); err != nil {
+		logger.Warn("gateway and WAN ping checks are off", "error", err)
+	}
 
 	cfg, err := config.LoadConfig(*configFlag)
 	if err != nil {
@@ -331,8 +345,9 @@ func main() {
 	updaterMgr := updater.NewManager(cfg.Update.Repo, version, func() {
 		shutdown("restarting for update")
 	})
+	updaterMgr.SetContainer(inContainer)
 	srv.SetUpdaterManager(updaterMgr)
-	if cfg.Update.CheckOnStartup {
+	if cfg.Update.CheckOnStartup && !inContainer {
 		updaterMgr.StartBackgroundChecker(rootCtx, time.Duration(cfg.Update.AutoCheckHours)*time.Hour)
 	}
 

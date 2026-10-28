@@ -91,3 +91,49 @@ jobs:
       - name: Smoke test binary
         run: |
           for p in standard aggressive lax; do bash scripts/smoke.sh "$PWD/netscan" "$p"; done
+
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build both architectures
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build amd64 for the run check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: netscan:ci
+
+      # Runs the image the way docker-compose.yml does, then checks the dashboard.
+      - name: Run the container
+        run: |
+          mkdir data
+          sudo chown 65532:65532 data
+          docker run -d --name netscan --network host --read-only --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -v "$PWD/data:/data" netscan:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9095/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9095/healthz | grep -q '"app":"netscan"'
+          curl -fsS http://127.0.0.1:9095/api/update/status | grep -q '"container":true'
+          curl -fsS http://127.0.0.1:9095/ | grep -q 'class="btn hidden" id="btn-update-menu"'
+          test "$(docker inspect -f '{{.State.Running}}' netscan)" = "true"
+
+      - name: Container logs
+        if: always()
+        run: docker logs netscan || true

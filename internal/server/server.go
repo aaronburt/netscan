@@ -273,9 +273,22 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	htmlStr := strings.ReplaceAll(string(content), "{{CSRF_TOKEN}}", s.csrfToken)
 	htmlStr = strings.ReplaceAll(htmlStr, "{{VERSION}}", s.version)
+	htmlStr = strings.ReplaceAll(htmlStr, "{{UPDATES_HIDDEN}}", s.updatesHidden())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	_, _ = w.Write([]byte(htmlStr))
+}
+
+// updatesHidden returns the class that hides the header's update button.
+// A container updates by pulling a new image, so there is nothing to offer.
+func (s *Server) updatesHidden() string {
+	s.lock.Lock()
+	mgr := s.updaterMgr
+	s.lock.Unlock()
+	if mgr != nil && mgr.Status().Container {
+		return " hidden"
+	}
+	return ""
 }
 
 func (s *Server) handleStyles(w http.ResponseWriter, _ *http.Request) {
