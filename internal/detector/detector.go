@@ -49,6 +49,11 @@ type Detector struct {
 	gatewayIP       string
 	ispHopIP        string
 
+	// After a profile switch, layers have no results until the new plan has
+	// probed them.
+	settling    bool
+	settleUntil time.Time
+
 	onFastModeChange func(fast bool)
 }
 
@@ -69,6 +74,78 @@ func NewDetector(cfg config.Config, profile config.Profile, clock Clock, onFastM
 		nextEventID:      1,
 		onFastModeChange: onFastModeChange,
 	}
+}
+
+// Apply switches to a new polling profile while running. The windows that
+// decide what counts as fresh come from the profile, so they change with it.
+//
+// Per-host history and the failure tracking belong to the old plan's hosts
+// and rates, so they are cleared. State, fast mode and any open event are
+// kept: a switch is not an outage ending. Layers have no results until the
+// new plan probes them, so the detector holds its state while a switch
+// settles rather than reading those empty layers as recovery.
+func (d *Detector) Apply(profile config.Profile) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.profile = profile
+	d.latestResults = make(map[int]probe.ProbeResult)
+	d.singleHist = make(map[int][]probe.ProbeResult)
+	d.layerStatuses = make(map[probe.Layer]LayerStatus)
+	d.clearFailTracking()
+	d.consecAllUP = 0
+
+	if d.state != StateHealthy {
+		d.settling = true
+		d.settleUntil = d.clock.Now().Add(d.settleFor())
+	}
+}
+
+// settleFor is how long after a switch to wait for every layer to be probed
+// on the new plan before giving up and trusting what is there: the slowest
+// layer's window.
+func (d *Detector) settleFor() time.Duration {
+	longest := time.Duration(0)
+	for _, l := range []probe.Layer{probe.LayerWANTCP, probe.LayerDNS, probe.LayerHTTP} {
+		if f := d.freshness(l); f > longest {
+			longest = f
+		}
+	}
+	return longest
+}
+
+// layerConfigured reports whether the profile probes a layer at all.
+func (d *Detector) layerConfigured(l probe.Layer) bool {
+	t := d.profile.Targets
+	switch l {
+	case probe.LayerWANTCP:
+		return len(t.WANTCP) > 0
+	case probe.LayerDNS:
+		return len(t.DNS) > 0
+	case probe.LayerHTTP:
+		return len(t.HTTP) > 0
+	}
+	return true
+}
+
+// stillSettling reports whether a switch is waiting on the new plan to probe
+// each layer once. It ends when every probed layer has a result or the wait
+// runs out.
+func (d *Detector) stillSettling(now time.Time) bool {
+	if !d.settling {
+		return false
+	}
+	if now.After(d.settleUntil) {
+		d.settling = false
+		return false
+	}
+	for _, l := range []probe.Layer{probe.LayerWANTCP, probe.LayerDNS, probe.LayerHTTP} {
+		if d.layerConfigured(l) && d.layerStatuses[l] == LayerStatusUnknown {
+			return true
+		}
+	}
+	d.settling = false
+	return false
 }
 
 func (d *Detector) SetNetworkContext(networkID int64, isVPN bool, gwIP, ispHop, ssid string) {
@@ -213,30 +290,42 @@ func (d *Detector) Tick(now time.Time) (*Event, *Event) {
 //
 // The ping layers are probed every tick, so three ticks is plenty.
 //
-// TCP, DNS and HTTP are probed less often in normal mode, and a probe that
-// fails by timing out is already as old as its timeout when it arrives
-// (results are stamped with the time they were sent). The window covers a
-// failed probe being confirmed by a second one: first probe, its timeout,
-// the confirming probe, and its timeout. It stays that wide in fast mode too,
-// so that going to fast mode on the first failure doesn't throw that failure
-// away before the confirmation arrives.
+// TCP, DNS and HTTP are probed less often, on a period of their own, and a
+// probe that fails by timing out is already as old as its timeout when it
+// arrives (results are stamped with the time they were sent). The window
+// covers a failed probe being confirmed by a second one: first probe, its
+// timeout, the confirming probe, and its timeout. It also has to reach the
+// next probe of the layer, or a slow layer would drop back to Unknown between
+// probes and a slow profile could not hold an outage open. So it is the
+// longer of the two. It stays that wide in fast mode too, so that going to
+// fast mode on the first failure doesn't throw that failure away before the
+// confirmation arrives.
 func (d *Detector) freshness(layer probe.Layer) time.Duration {
-	var timeoutMS int
+	iv := d.profile.Intervals
+	ms := time.Millisecond
+	var periodMS, timeoutMS int
 	switch layer {
 	case probe.LayerWANTCP:
-		timeoutMS = d.profile.TimeoutsMS.TCP
+		periodMS, timeoutMS = iv.WANTCPMS, d.profile.TimeoutsMS.TCP
 	case probe.LayerDNS:
-		timeoutMS = d.profile.TimeoutsMS.DNS
+		periodMS, timeoutMS = iv.DNSMS, d.profile.TimeoutsMS.DNS
 	case probe.LayerHTTP:
-		timeoutMS = d.profile.TimeoutsMS.HTTP
-	default:
-		tick := d.profile.Intervals.NormalMS
+		periodMS, timeoutMS = iv.HTTPMS, d.profile.TimeoutsMS.HTTP
+	case probe.LayerISPHop:
+		tick := max(iv.NormalMS, iv.ISPHopMS)
 		if d.fastMode {
-			tick = d.profile.Intervals.FastMS
+			tick = iv.FastMS
 		}
-		return 3 * time.Duration(tick) * time.Millisecond
+		return 3 * time.Duration(tick) * ms
+	default:
+		tick := iv.NormalMS
+		if d.fastMode {
+			tick = iv.FastMS
+		}
+		return 3 * time.Duration(tick) * ms
 	}
-	return 3*time.Duration(d.profile.Intervals.NormalMS)*time.Millisecond + 2*time.Duration(timeoutMS)*time.Millisecond
+	window := 3*iv.NormalMS + 2*timeoutMS
+	return time.Duration(max(window, periodMS+timeoutMS)) * ms
 }
 
 // minEvidence is how many fresh results a layer needs before it can be
@@ -412,6 +501,12 @@ func (d *Detector) transitionOnProbe(now time.Time, hasLatency bool) (*Event, *E
 }
 
 func (d *Detector) transitionOnTick(now time.Time) (*Event, *Event) {
+	// Right after a profile switch a layer with no result says nothing, so
+	// hold the state until each probed layer has one.
+	if d.stillSettling(now) {
+		return nil, nil
+	}
+
 	allUP := d.isAllLayersUP()
 	anyDown := d.isAnyLayerDown()
 

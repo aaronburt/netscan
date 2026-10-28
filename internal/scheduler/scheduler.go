@@ -12,8 +12,14 @@ import (
 )
 
 type Scheduler struct {
-	profile    config.Profile
-	registry   *probe.TargetRegistry
+	// profile and registry change on Apply, so goroutines read them through
+	// current.
+	planLock sync.RWMutex
+	profile  config.Profile
+	registry *probe.TargetRegistry
+	applied  uint64 // bumped by Apply
+	wake     chan struct{}
+
 	outCh      chan probe.ProbeResult
 	fastMode   atomic.Bool
 	paused     atomic.Bool
@@ -24,11 +30,12 @@ type Scheduler struct {
 	version    string
 
 	// Only touched by the Run goroutine (through planTick).
-	ticks   int64
-	tcpIdx  int
-	dnsIdx  int
-	httpIdx int
-	secIdx  int
+	seenApply uint64
+	ticks     int64
+	tcpIdx    int
+	dnsIdx    int
+	httpIdx   int
+	secIdx    int
 
 	onGap func(gapDuration time.Duration)
 }
@@ -37,10 +44,36 @@ func NewScheduler(profile config.Profile, registry *probe.TargetRegistry, outCh 
 	return &Scheduler{
 		profile:  profile,
 		registry: registry,
+		wake:     make(chan struct{}, 1),
 		outCh:    outCh,
 		inFlight: make(map[int]*atomic.Int32),
 		version:  version,
 		onGap:    onGap,
+	}
+}
+
+// current returns the profile and registry in force.
+func (s *Scheduler) current() (config.Profile, *probe.TargetRegistry) {
+	s.planLock.RLock()
+	defer s.planLock.RUnlock()
+	return s.profile, s.registry
+}
+
+// Apply switches to a new profile without a restart. reg is the registry to
+// plan from; pass the same registry after Reconfigure to keep ids stable.
+// The next tick runs at once on the new plan, with every layer due, and
+// the timing grid restarts. Probes already in flight finish under the old
+// timeouts.
+func (s *Scheduler) Apply(profile config.Profile, reg *probe.TargetRegistry) {
+	s.planLock.Lock()
+	s.profile = profile
+	s.registry = reg
+	s.applied++
+	s.planLock.Unlock()
+
+	select {
+	case s.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -151,10 +184,16 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			}
 		}
 
+		// A new plan starts on a fresh grid, and is not a gap.
+		if s.noteApply() {
+			p.reset()
+		}
+
+		prof, _ := s.current()
 		isFast := s.fastMode.Load()
-		intervalMS := s.profile.Intervals.NormalMS
+		intervalMS := prof.Intervals.NormalMS
 		if isFast {
-			intervalMS = s.profile.Intervals.FastMS
+			intervalMS = prof.Intervals.FastMS
 		}
 		interval := time.Duration(intervalMS) * time.Millisecond
 
@@ -169,10 +208,25 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return nil
+			case <-s.wake:
 			case <-time.After(wait):
 			}
 		}
 	}
+}
+
+// noteApply reports whether Apply was called since the last tick, and if so
+// restarts rotation so the first tick on the new plan probes every layer.
+func (s *Scheduler) noteApply() bool {
+	s.planLock.RLock()
+	n := s.applied
+	s.planLock.RUnlock()
+	if n == s.seenApply {
+		return false
+	}
+	s.seenApply = n
+	s.ticks, s.tcpIdx, s.dnsIdx, s.httpIdx, s.secIdx = 0, 0, 0, 0, 0
+	return true
 }
 
 // tickPlan is what one tick will probe, per layer.
@@ -199,29 +253,34 @@ func everyN(periodMS int, interval time.Duration) int64 {
 func (s *Scheduler) planTick(isFast bool, interval time.Duration) tickPlan {
 	tick := s.ticks
 	s.ticks++
-	iv := s.profile.Intervals
+	prof, reg := s.current()
+	iv := prof.Intervals
 	due := func(periodMS int) bool { return tick%everyN(periodMS, interval) == 0 }
 
 	var plan tickPlan
-	wanICMP := s.registry.GetWANICMP()
-	if gw := s.registry.GetGateway(); gw != nil {
+	wanICMP := reg.GetWANICMP()
+	if gw := reg.GetGateway(); gw != nil {
 		plan.icmp = append(plan.icmp, *gw)
 	}
 
+	if prof.Mode == config.ModeParallel && !isFast {
+		return s.planParallel(prof, reg, due, plan, wanICMP)
+	}
+
 	if isFast {
-		if isp := s.registry.GetISPHop(); isp != nil {
+		if isp := reg.GetISPHop(); isp != nil {
 			plan.icmp = append(plan.icmp, *isp)
 		}
 		plan.icmp = append(plan.icmp, wanICMP...)
-		plan.dns = s.registry.GetDNS()
-		plan.tcp = s.registry.GetWANTCP()
+		plan.dns = reg.GetDNS()
+		plan.tcp = reg.GetWANTCP()
 		if tick%2 == 0 {
-			plan.http = s.registry.GetHTTP()
+			plan.http = reg.GetHTTP()
 		}
 		return plan
 	}
 
-	if isp := s.registry.GetISPHop(); isp != nil && due(iv.ISPHopMS) {
+	if isp := reg.GetISPHop(); isp != nil && due(iv.ISPHopMS) {
 		plan.icmp = append(plan.icmp, *isp)
 	}
 	if len(wanICMP) > 0 {
@@ -231,13 +290,40 @@ func (s *Scheduler) planTick(isFast bool, interval time.Duration) tickPlan {
 		}
 	}
 	if due(iv.DNSMS) {
-		plan.dns = pickNext(s.registry.GetDNS(), &s.dnsIdx)
+		plan.dns = pickNext(reg.GetDNS(), &s.dnsIdx)
 	}
 	if due(iv.WANTCPMS) {
-		plan.tcp = pickNext(s.registry.GetWANTCP(), &s.tcpIdx)
+		plan.tcp = pickNext(reg.GetWANTCP(), &s.tcpIdx)
 	}
 	if due(iv.HTTPMS) {
-		plan.http = pickNext(s.registry.GetHTTP(), &s.httpIdx)
+		plan.http = pickNext(reg.GetHTTP(), &s.httpIdx)
+	}
+	return plan
+}
+
+// planParallel is normal mode for a parallel profile: no rotation, every host
+// of a layer is probed whenever the layer is due. plan already holds the
+// gateway. A failure needs no confirming probe, since the other hosts are
+// probed in the same period anyway.
+func (s *Scheduler) planParallel(prof config.Profile, reg *probe.TargetRegistry, due func(int) bool, plan tickPlan, wanICMP []probe.Target) tickPlan {
+	iv := prof.Intervals
+	if isp := reg.GetISPHop(); isp != nil && due(iv.ISPHopMS) {
+		plan.icmp = append(plan.icmp, *isp)
+	}
+	if len(wanICMP) > 0 {
+		plan.icmp = append(plan.icmp, wanICMP[0])
+		if due(iv.WANICMPSecondaryMS) {
+			plan.icmp = append(plan.icmp, wanICMP[1:]...)
+		}
+	}
+	if due(iv.DNSMS) {
+		plan.dns = reg.GetDNS()
+	}
+	if due(iv.WANTCPMS) {
+		plan.tcp = reg.GetWANTCP()
+	}
+	if due(iv.HTTPMS) {
+		plan.http = reg.GetHTTP()
 	}
 	return plan
 }
@@ -256,14 +342,37 @@ func (s *Scheduler) dispatchTick(ctx context.Context, isFast bool, interval time
 	plan := s.planTick(isFast, interval)
 	staggerStep := interval / 4
 
+	prof, _ := s.current()
+	if prof.Mode == config.ModeParallel {
+		// Spread the hosts of each layer across its quarter of the tick as
+		// well, so probing every host doesn't land as one burst.
+		s.launchSpread(ctx, 0, staggerStep, plan.icmp, isFast)
+		s.launchSpread(ctx, staggerStep, staggerStep, plan.dns, isFast)
+		s.launchSpread(ctx, 2*staggerStep, staggerStep, plan.tcp, isFast)
+		s.launchSpread(ctx, 3*staggerStep, staggerStep, plan.http, isFast)
+		return
+	}
+
 	s.launchBatch(ctx, plan.icmp, isFast)
 	s.launchAfter(ctx, staggerStep, plan.dns, isFast)
 	s.launchAfter(ctx, 2*staggerStep, plan.tcp, isFast)
 	s.launchAfter(ctx, 3*staggerStep, plan.http, isFast)
 }
 
+// launchSpread starts targets evenly across window, beginning at start.
+func (s *Scheduler) launchSpread(ctx context.Context, start, window time.Duration, targets []probe.Target, isFast bool) {
+	for i, t := range targets {
+		delay := start + window*time.Duration(i)/time.Duration(len(targets))
+		s.launchAfter(ctx, delay, []probe.Target{t}, isFast)
+	}
+}
+
 func (s *Scheduler) launchAfter(ctx context.Context, delay time.Duration, targets []probe.Target, isFast bool) {
 	if len(targets) == 0 {
+		return
+	}
+	if delay <= 0 {
+		s.launchBatch(ctx, targets, isFast)
 		return
 	}
 	go func() {
@@ -301,15 +410,16 @@ func (s *Scheduler) launch(ctx context.Context, target probe.Target, isFast, con
 // layerTargets returns the configured targets of a layer that can be
 // confirmed against each other.
 func (s *Scheduler) layerTargets(layer probe.Layer) []probe.Target {
+	_, reg := s.current()
 	switch layer {
 	case probe.LayerWANICMP:
-		return s.registry.GetWANICMP()
+		return reg.GetWANICMP()
 	case probe.LayerWANTCP:
-		return s.registry.GetWANTCP()
+		return reg.GetWANTCP()
 	case probe.LayerDNS:
-		return s.registry.GetDNS()
+		return reg.GetDNS()
 	case probe.LayerHTTP:
-		return s.registry.GetHTTP()
+		return reg.GetHTTP()
 	}
 	return nil
 }
@@ -352,16 +462,17 @@ func (s *Scheduler) emitSkipped(t probe.Target, isFast bool) {
 // for that second result before calling the layer down.
 func (s *Scheduler) run(ctx context.Context, t probe.Target, isFast, confirming bool) {
 	seq := s.seq.Add(1)
+	prof, reg := s.current()
 	var res probe.ProbeResult
 	switch t.Layer {
 	case probe.LayerGateway, probe.LayerISPHop, probe.LayerWANICMP:
-		res = probe.ProbeICMP(t, time.Duration(s.profile.TimeoutsMS.ICMP)*time.Millisecond, seq)
+		res = probe.ProbeICMP(t, time.Duration(prof.TimeoutsMS.ICMP)*time.Millisecond, seq)
 	case probe.LayerWANTCP:
-		res = probe.ProbeTCP(t, time.Duration(s.profile.TimeoutsMS.TCP)*time.Millisecond, seq)
+		res = probe.ProbeTCP(t, time.Duration(prof.TimeoutsMS.TCP)*time.Millisecond, seq)
 	case probe.LayerDNS:
-		res = probe.ProbeDNS(t, s.registry.GetDNSQueryName(), time.Duration(s.profile.TimeoutsMS.DNS)*time.Millisecond, seq)
+		res = probe.ProbeDNS(t, reg.GetDNSQueryName(), time.Duration(prof.TimeoutsMS.DNS)*time.Millisecond, seq)
 	case probe.LayerHTTP:
-		res = probe.ProbeHTTP(t, time.Duration(s.profile.TimeoutsMS.HTTP)*time.Millisecond, seq, s.version)
+		res = probe.ProbeHTTP(t, time.Duration(prof.TimeoutsMS.HTTP)*time.Millisecond, seq, s.version)
 	default:
 		return
 	}
@@ -370,7 +481,7 @@ func (s *Scheduler) run(ctx context.Context, t probe.Target, isFast, confirming 
 	}
 	s.sendResult(res)
 
-	if res.OK || isFast || confirming || ctx.Err() != nil {
+	if res.OK || isFast || confirming || prof.Mode == config.ModeParallel || ctx.Err() != nil {
 		return
 	}
 	if other, ok := s.confirmTarget(t); ok {

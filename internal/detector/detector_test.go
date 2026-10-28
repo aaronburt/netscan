@@ -591,3 +591,95 @@ func TestICMPOnlyBlipIsNotAttributedToWAN(t *testing.T) {
 		t.Fatalf("blip layers = %b, want only WAN ICMP", created.LayersDown)
 	}
 }
+
+// openOutage drives the detector into an open outage.
+func openOutage(t *testing.T, d *detector.Detector, clock *MockClock) {
+	t.Helper()
+	sendTick(d, clock, true, true, true)
+	var created *detector.Event
+	for i := 0; i < 3 && created == nil; i++ {
+		clock.Advance(time.Second)
+		created, _ = sendTick(d, clock, false, false, true)
+	}
+	if created == nil || created.Kind != detector.EventKindOutage {
+		t.Fatalf("setup: no outage opened: %+v", created)
+	}
+}
+
+// Right after a switch no layer has a result yet. That must not read as
+// recovery, so the outage is held until the new plan has probed each layer.
+func TestApplyDuringOutageHoldsUntilProbed(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	openOutage(t, d, clock)
+
+	d.Apply(config.Lax())
+	for i := 0; i < 6; i++ {
+		clock.Advance(time.Second)
+		if _, closed := d.Tick(clock.Now()); closed != nil {
+			t.Fatalf("outage closed on tick %d after a switch, before the new plan probed anything", i+1)
+		}
+	}
+	if st := d.GetSnapshot().State; st != detector.StateOutage {
+		t.Fatalf("state = %v after a switch, want outage held", st)
+	}
+
+	// Once the new plan reports a healthy network, it recovers as normal.
+	var closed *detector.Event
+	for i := 0; i < 6 && closed == nil; i++ {
+		clock.Advance(time.Second)
+		_, closed = sendTick(d, clock, true, true, true)
+	}
+	if closed == nil {
+		t.Fatal("outage should close after healthy results on the new profile")
+	}
+}
+
+// A network that is still down when the new plan starts keeps the outage open
+// through the switch, however long the slow layers take to report.
+func TestOutageStaysOpenAcrossSwitchWhileStillDown(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
+	d, _ := setupDetector(clock)
+	openOutage(t, d, clock)
+
+	d.Apply(config.Lax())
+	for i := 0; i < 120; i++ {
+		clock.Advance(time.Second)
+		if _, closed := sendTick(d, clock, true, false, true); closed != nil {
+			t.Fatalf("outage closed after %ds of a network that is still down", i+1)
+		}
+	}
+	if st := d.GetSnapshot().State; st != detector.StateOutage {
+		t.Fatalf("state = %v, want outage", st)
+	}
+}
+
+func TestApplyClearsHostHistoryButKeepsState(t *testing.T) {
+	clock := &MockClock{curr: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
+	d, fast := setupDetector(clock)
+	openOutage(t, d, clock)
+
+	d.Apply(config.Aggressive())
+	snap := d.GetSnapshot()
+	if snap.State != detector.StateOutage || snap.OpenEvent == nil || !*fast {
+		t.Fatalf("switch changed state: %v, open=%v, fast=%v", snap.State, snap.OpenEvent != nil, *fast)
+	}
+	if len(snap.LatestRTTUS) != 0 {
+		t.Fatalf("old per-host results survived the switch: %v", snap.LatestRTTUS)
+	}
+}
+
+// Each built-in must treat a host as fresh until its own next probe is due,
+// however slowly its layer is polled.
+func TestFreshnessFollowsTheProfilePeriod(t *testing.T) {
+	for _, prof := range config.BuiltInProfiles() {
+		clock := &MockClock{curr: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
+		d := detector.NewDetector(config.DefaultConfig(), prof, clock, nil)
+		d.ProcessProbe(makeProbe(30, probe.LayerDNS, true, clock))
+		clock.Advance(time.Duration(prof.Intervals.DNSMS) * time.Millisecond)
+		d.Tick(clock.Now())
+		if st := d.GetSnapshot().LayerStatuses[probe.LayerDNS]; st != detector.LayerStatusUp {
+			t.Errorf("%s: DNS is %v one period after its last probe, want up", prof.ID, st)
+		}
+	}
+}

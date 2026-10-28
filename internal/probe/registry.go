@@ -49,10 +49,43 @@ func NewTargetRegistry(p config.Profile) *TargetRegistry {
 
 func NewTargetRegistryWithIDs(p config.Profile, ids *IDAllocator) *TargetRegistry {
 	r := &TargetRegistry{
-		allTargets:   make(map[int]Target),
-		ids:          ids,
-		dnsQueryName: p.Targets.DNSQueryName,
+		allTargets: make(map[int]Target),
+		ids:        ids,
 	}
+	r.buildHosts(p)
+	return r
+}
+
+// Reconfigure swaps the configured hosts for those of p, as when the active
+// profile changes. The gateway, ISP hop and system resolvers are discovered
+// at run time and are kept. Hosts shared with the old profile keep their ids.
+// It returns every target now registered so the caller can store new ones.
+func (r *TargetRegistry) Reconfigure(p config.Profile) []Target {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.allTargets = make(map[int]Target)
+	if r.gateway != nil {
+		r.allTargets[GatewayTargetID] = *r.gateway
+	}
+	if r.ispHop != nil {
+		r.allTargets[ISPHopTargetID] = *r.ispHop
+	}
+	r.buildHosts(p)
+	r.applySystemResolvers()
+
+	all := make([]Target, 0, len(r.allTargets))
+	for _, t := range r.allTargets {
+		all = append(all, t)
+	}
+	return all
+}
+
+// buildHosts fills the host lists from p. The caller holds the lock, or has
+// not shared the registry yet.
+func (r *TargetRegistry) buildHosts(p config.Profile) {
+	r.wanICMP, r.wanTCP, r.dns, r.http = nil, nil, nil, nil
+	r.dnsQueryName = p.Targets.DNSQueryName
 
 	for _, addr := range p.Targets.WANICMP {
 		id := r.ids.ID(LayerWANICMP, addr, 0)
@@ -119,8 +152,6 @@ func NewTargetRegistryWithIDs(p config.Profile, ids *IDAllocator) *TargetRegistr
 		r.http = append(r.http, t)
 		r.allTargets[id] = t
 	}
-
-	return r
 }
 
 // WithDefaultPort adds port to addr unless it already has one. It handles
@@ -178,7 +209,12 @@ func (r *TargetRegistry) UpdateSystemResolvers(resolvers []string) {
 	defer r.lock.Unlock()
 
 	r.systemResolvers = resolvers
+	r.applySystemResolvers()
+}
 
+// applySystemResolvers replaces the system resolvers among the DNS targets
+// with r.systemResolvers. The caller holds the lock.
+func (r *TargetRegistry) applySystemResolvers() {
 	kept := make([]Target, 0, len(r.dns))
 	for _, t := range r.dns {
 		if strings.HasPrefix(t.Label, "System DNS") {
@@ -195,7 +231,7 @@ func (r *TargetRegistry) UpdateSystemResolvers(resolvers []string) {
 		seen[WithDefaultPort(t.Address, "53")] = true
 	}
 
-	for _, s := range resolvers {
+	for _, s := range r.systemResolvers {
 		key := WithDefaultPort(s, "53")
 		if seen[key] {
 			continue

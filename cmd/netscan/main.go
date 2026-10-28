@@ -24,6 +24,7 @@ import (
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/server"
 	"github.com/aaronburt/netscan/internal/store"
+	"github.com/aaronburt/netscan/internal/switcher"
 	"github.com/aaronburt/netscan/internal/tray"
 	"github.com/aaronburt/netscan/internal/updater"
 )
@@ -273,6 +274,18 @@ func main() {
 		}
 	})
 
+	// The processor loop follows the profile's tick; a switch sends the new one.
+	tickCh := make(chan time.Duration, 1)
+	profileSwitcher := switcher.New(profile, registry, sched, det, storeWriter.QueueTarget, func(p config.Profile) {
+		logger.Info("polling profile switched", "id", p.ID, "name", p.Name, "mode", p.Mode)
+		select {
+		case <-tickCh:
+		default:
+		}
+		tickCh <- time.Duration(p.Intervals.NormalMS) * time.Millisecond
+	})
+	reloadProfileOnSignal(logger, *configFlag, profileSwitcher)
+
 	srv, err := server.NewServer(cfg, storeReader, storeWriter, det, h, sched, netEnv, registry, version)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
@@ -371,6 +384,9 @@ func main() {
 					storeWriter.QueueEvent(*closed)
 					h.PublishEvent(*closed)
 				}
+
+			case d := <-tickCh:
+				ticker.Reset(d)
 
 			case <-ticker.C:
 				created, closed := det.Tick(time.Now())

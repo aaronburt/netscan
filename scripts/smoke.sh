@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN="${1:?usage: smoke.sh path/to/netscan[.exe]}"
+BIN="${1:?usage: smoke.sh path/to/netscan[.exe] [profile]}"
 PORT="${SMOKE_PORT:-19191}"
+# Polling profile to start with: standard, aggressive or lax. Run the script
+# once per built-in.
+PROFILE="${2:-${SMOKE_PROFILE:-standard}}"
 DATA="$(mktemp -d)"
 export NETSCAN_DATA_DIR="$DATA"
 
 cat > "$DATA/config.json" <<JSON
-{"http":{"addr":"127.0.0.1","port":$PORT}}
+{"active_profile":"$PROFILE","http":{"addr":"127.0.0.1","port":$PORT}}
 JSON
 
 cleanup() {
@@ -60,4 +63,8 @@ curl -fsS "$BASE/api/events" > /dev/null
 curl -fsS "$BASE/api/samples?limit=5" > /dev/null
 curl -fsS "$BASE/api/export/events.csv" > /dev/null
 
-echo "smoke ok"
+# The profile named in config must be the one that started. Checked from the
+# startup log, so it doesn't depend on the network the probes can reach.
+grep -q "\"id\":\"$PROFILE\"" "$DATA/stdout.log"
+
+echo "smoke ok ($PROFILE)"
