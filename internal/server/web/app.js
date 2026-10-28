@@ -51,6 +51,9 @@ function failedLayers(mask) {
 const FLAG_LATENCY = 1 << 1;
 const FLAG_SPIKE = 1 << 2;
 
+// The built-in profile that sends extra traffic and never switches back by itself.
+const EXTRA_TRAFFIC_PROFILE = 'aggressive';
+
 const BYID = {};
 SER.forEach(s => { BYID[s.id] = s; });
 
@@ -90,6 +93,12 @@ let hover = null;
 let paused = false;
 let currentGatewayIP = '';
 let currentInterface = 'Ethernet';
+
+// Profiles as /api/profiles lists them, the profile records in the selected log
+// range by id, and how much of that range each profile covered.
+let profileList = [];
+let profileNames = {};
+let profileUsage = [];
 
 const F = { mode: 'out', proto: 'all', cls: 'all', range: '7d', limit: 10 };
 
@@ -210,7 +219,7 @@ function renderStatus() {
   const blips24 = events.filter(e => e.cls === 'blip' && e.start > Date.now() - 864e5).length;
   let txt = '';
   if (st === 'outage') {
-    txt = 'Nothing is answering from the internet. NetScan is probing every <strong>500 ms</strong> to time the drop.';
+    txt = 'Nothing is answering from the internet. NetScan is probing every <strong>' + activeFastMS() + ' ms</strong> to time the drop.';
   } else if (st === 'degraded') {
     txt = 'One probe failed. NetScan waits for a second failure before it calls this an outage.';
   } else if (st === 'recovering') {
@@ -254,6 +263,7 @@ function pathD(vals, x, y) {
 function renderTiles() {
   const container = $('tiles');
   if (!container) return;
+  const parallel = activeProfile()?.mode === 'parallel';
 
   container.innerHTML = SER.map(s => {
     const vals = live.map(p => p.v[s.id]);
@@ -279,7 +289,7 @@ function renderTiles() {
       '<div class="tile-t">' + esc(s.target) + '</div>' +
       '<div class="tile-v">' + (lastOk ? '<b>' + last.toFixed(1) + '</b><span>ms</span>' : noData ? '<b>waiting</b>' : '<b class="bad">no answer</b>') + '</div>' + spark +
       (s.slow
-        ? '<div class="tile-f"><span>checked <b>' + (lastProbeMS[s.id] ? fmtAgo(Date.now() - lastProbeMS[s.id]) + ' ago' : 'n/a') + '</b></span><span>rotates targets</span></div></div>'
+        ? '<div class="tile-f"><span>checked <b>' + (lastProbeMS[s.id] ? fmtAgo(Date.now() - lastProbeMS[s.id]) + ' ago' : 'n/a') + '</b></span><span>' + (parallel ? 'probes every host' : 'rotates targets') + '</span></div></div>'
         : '<div class="tile-f"><span>60 s avg <b>' + avg.toFixed(1) + ' ms</b></span><span>loss <b>' + loss.toFixed(1) + '%</b></span></div></div>');
   }).join('');
 }
@@ -496,11 +506,11 @@ function renderLog() {
 
   $('log-count').textContent = rows.length + (out ? ' outage events' : ' failed probes') + ' in selected range';
   $('thead').innerHTML = out
-    ? '<tr><th>Time</th><th>Length</th><th>Cause</th><th>Router</th><th>Failed probes</th></tr>'
+    ? '<tr><th>Time</th><th>Length</th><th>Cause</th><th>Router</th><th>Failed probes</th><th>Profile</th></tr>'
     : '<tr><th>Time</th><th>Probe</th><th>Target</th><th>Error</th><th>Cause</th></tr>';
 
   if (!shown.length) {
-    $('tbody').innerHTML = '<tr><td colspan="5" class="empty">No drops match these filters. Try a longer time range.</td></tr>';
+    $('tbody').innerHTML = '<tr><td colspan="' + (out ? 6 : 5) + '" class="empty">No drops match these filters. Try a longer time range.</td></tr>';
   } else {
     $('tbody').innerHTML = shown.map(e => {
       if (out) {
@@ -508,7 +518,8 @@ function renderLog() {
         return '<tr data-id="' + e.id + '"><td><button class="rowbtn" type="button" data-id="' + e.id + '">' + fmtD(e.start) + ' ' + fmtT(e.start) + '</button></td><td class="mono">' + fmtDur(e.dur) + '</td>' +
           '<td><span class="pill ' + c.sev + '">' + (c.sev === 'bad' ? ICO.x : ICO.warn) + c.label + '</span></td>' +
           '<td>' + (e.gwPct > 0 ? '<span class="gwc ok">' + ICO.check + '<span class="mono">' + Math.round(e.gwPct) + '% answered</span></span>' : '<span class="gwc no">' + ICO.x + 'No reply</span>') + '</td>' +
-          '<td>' + (e.fail.length ? '<div class="chips">' + e.fail.map(chip).join('') + '</div>' : '<span class="muted">' + (e.cls === 'lat' ? 'All answered, RTT above 400 ms' : 'Short drop, no layer fully down') + '</span>') + '</td></tr>';
+          '<td>' + (e.fail.length ? '<div class="chips">' + e.fail.map(chip).join('') + '</div>' : '<span class="muted">' + (e.cls === 'lat' ? 'All answered, RTT above 400 ms' : 'Short drop, no layer fully down') + '</span>') + '</td>' +
+          '<td><span class="tag">' + esc(profileLabel(e.raw.profile_id)) + '</span></td></tr>';
       }
       const c2 = CLS[e.cls] || CLS.wan;
       return '<tr data-id="' + (e.oid || '') + '"><td><button class="rowbtn" type="button" data-id="' + (e.oid || '') + '">' + fmtD(e.ts) + ' ' + fmtT(e.ts, true) + '</button></td><td>' + chip(e.proto) + '</td><td class="mono">' + esc(e.target || BYID[e.proto]?.target || '') + '</td><td class="mono">' + esc(e.err) + '</td><td><span class="pill ' + c2.sev + '">' + c2.label + '</span></td></tr>';
@@ -523,6 +534,7 @@ function renderLog() {
     moreBtn.classList.toggle('hidden', left <= 0);
     moreBtn.textContent = 'Show ' + Math.min(10, left) + ' more';
   }
+  renderProfileBanner();
 }
 
 async function openDrawer(id) {
@@ -1123,11 +1135,225 @@ function setupResetManager() {
   });
 }
 
+// profileFetch sends a change to the profiles API and returns its answer. A
+// refused change throws, with the server's reason as the message.
+async function profileFetch(url, method, body) {
+  const res = await fetch(url, {
+    method: method,
+    headers: { 'Content-Type': 'application/json', 'X-NetScan-Token': csrfToken, 'Sec-Fetch-Site': 'same-origin' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text.trim();
+    try {
+      const problem = JSON.parse(text);
+      if (problem.error) {
+        msg = [problem.error].concat((problem.errors || []).map(i => i.field + ' ' + i.message)).join('; ');
+      }
+    } catch (_) {}
+    throw new Error(msg || res.statusText);
+  }
+  return text ? JSON.parse(text) : null;
+}
+
+// activeProfile is the profile the monitor runs, as the profiles API last said.
+function activeProfile() {
+  return profileList.find(p => p.active) || null;
+}
+
+// activeFastMS is the interval outages are timed at under the running profile.
+function activeFastMS() {
+  const p = activeProfile();
+  return p ? p.intervals.fast_ms : 500;
+}
+
+// profileLabel names the profile an event ran under. An event with no profile
+// recorded predates profile history, so it ran under Standard.
+function profileLabel(id) {
+  if (!id) return 'Standard';
+  return profileNames[id] || 'Unknown';
+}
+
+async function fetchProfiles() {
+  try {
+    const res = await fetch('/api/profiles');
+    renderProfiles(await res.json());
+  } catch (_) {
+    $('profile-select').innerHTML = '<option>Unavailable</option>';
+    $('profile-select').disabled = true;
+  }
+}
+
+// fetchProfileHistory loads which profiles ran in the selected log range, for the
+// event tags and the banner.
+async function fetchProfileHistory() {
+  const toMS = Date.now();
+  const fromMS = toMS - (RANGE[F.range] || RANGE['7d']);
+  try {
+    const res = await fetch('/api/profiles/history?from=' + fromMS + '&to=' + toMS);
+    const data = await res.json();
+    profileNames = {};
+    (data.profiles || []).forEach(r => { profileNames[r.id] = r.profile_name; });
+    profileUsage = data.usage || [];
+    renderLog();
+  } catch (_) {}
+}
+
+// renderProfiles draws the header switcher, its extra-traffic warning and the
+// profile cards from the profiles API's answer.
+function renderProfiles(data) {
+  profileList = data.profiles || [];
+  const sel = $('profile-select');
+  sel.disabled = false;
+  sel.innerHTML = profileList.map(p =>
+    '<option value="' + esc(p.id) + '"' + (p.active ? ' selected' : '') + '>' + esc(p.name) + '</option>'
+  ).join('');
+  $('profile-warn').hidden = activeProfile()?.id !== EXTRA_TRAFFIC_PROFILE;
+  $('profile-grid').innerHTML = profileList.map(p => profileCard(p)).join('');
+  renderStatus();
+  renderTiles();
+}
+
+// profileCard is one profile in the panel: its load figures, any warnings and
+// the actions it offers. Only built-in profiles can be duplicated for now.
+function profileCard(p) {
+  const est = p.estimate;
+  const notes = p.id === EXTRA_TRAFFIC_PROFILE
+    ? ['Extra traffic. Every host is probed each period, which sends many more requests to public hosts. It stays on until you switch back and does not revert on its own.']
+    : [];
+  p.warnings.forEach(w => notes.push(w.message));
+
+  const acts = [];
+  if (!p.active) acts.push('<button class="btn" type="button" data-act="use" data-id="' + esc(p.id) + '">Use this profile</button>');
+  if (p.built_in) acts.push('<button class="btn" type="button" data-act="duplicate" data-id="' + esc(p.id) + '">Duplicate</button>');
+
+  return '<article class="card profile-card' + (p.active ? ' active' : '') + '" aria-labelledby="pf-' + esc(p.id) + '">' +
+    '<div class="profile-h"><h3 id="pf-' + esc(p.id) + '">' + esc(p.name) + '</h3>' +
+    (p.active ? '<span class="pill good">' + ICO.check + 'Running</span>' : '') +
+    '<span class="pill">' + (p.built_in ? 'Built-in' : 'Custom') + '</span></div>' +
+    '<p class="profile-d">' + esc(p.description) + '</p>' +
+    '<dl class="profile-stats">' +
+    '<dt>Probes/s</dt><dt>Rows/day</dt><dt title="Rough figure: the shortest outage this profile should catch">Min. outage</dt>' +
+    '<dd>' + est.probes_per_s.toFixed(1) + '</dd><dd>' + est.rows_per_day.toLocaleString() + '</dd><dd>' + fmtDur(est.min_detectable_outage_ms) + '</dd>' +
+    '</dl>' +
+    '<p class="profile-meta">' + est.remote_probes_per_s.toFixed(1) + ' probes/s go to public hosts.</p>' +
+    notes.map(n => '<p class="note">' + esc(n) + '</p>').join('') +
+    (acts.length ? '<div class="profile-acts">' + acts.join('') + '</div>' : '') +
+    '</article>';
+}
+
+// renderProfileBanner says when the selected log range used more than one
+// profile, since drop and blip counts depend on the settings they ran with.
+function renderProfileBanner() {
+  const el = $('profile-banner');
+  if (!el) return;
+  el.hidden = profileUsage.length < 2;
+  if (el.hidden) return;
+  el.innerHTML = '<strong>This range used ' + profileUsage.length + ' profiles.</strong> ' +
+    profileUsage.map(u => esc(u.name) + ' ' + (u.share_pct < 1 ? '&lt;1%' : Math.round(u.share_pct) + '%')).join(', ') +
+    '. Drop counts and brief probe failures depend on the profile, so compare ranges that used the same one.';
+}
+
+// setProfileMsg shows the outcome of the last profile change. tone is "warn",
+// "bad" or "" for plain text.
+function setProfileMsg(text, tone) {
+  const el = $('profile-msg');
+  el.textContent = text;
+  el.className = 'profile-msg' + (tone ? ' ' + tone : '');
+}
+
+// scheduleProfileHistory reads the profile history after a switch. The server
+// writes that history every two seconds, so a read sooner can miss the switch.
+function scheduleProfileHistory() {
+  setTimeout(fetchProfileHistory, 2500);
+}
+
+// activateProfile makes a profile the one that runs. The server saves the choice
+// to config.json.
+async function activateProfile(id) {
+  setProfileMsg('Switching profile...');
+  try {
+    renderProfiles(await profileFetch('/api/profiles/' + encodeURIComponent(id) + '/activate', 'POST'));
+    setProfileMsg('Now running ' + (activeProfile()?.name || id) + '.');
+    scheduleProfileHistory();
+  } catch (err) {
+    setProfileMsg(err.message, 'bad');
+    fetchProfiles();
+  }
+}
+
+// duplicateProfile copies a built-in profile into a new custom one, which can
+// then be switched to.
+async function duplicateProfile(id) {
+  const src = profileList.find(p => p.id === id);
+  if (!src) return;
+  let name = src.name + ' copy';
+  for (let n = 2; profileList.some(p => p.name === name); n++) {
+    name = src.name + ' copy ' + n;
+  }
+  setProfileMsg('Saving ' + name + '...');
+  try {
+    renderProfiles(await profileFetch('/api/profiles', 'POST', {
+      name: name,
+      description: 'Copy of ' + src.name + '.',
+      mode: src.mode,
+      intervals: src.intervals,
+      timeouts_ms: src.timeouts_ms,
+      targets: src.targets
+    }));
+    setProfileMsg('Saved ' + name + ' as a custom profile.');
+  } catch (err) {
+    setProfileMsg(err.message, 'bad');
+    fetchProfiles();
+  }
+}
+
+// reloadProfiles applies hand edits to config.json without a restart.
+async function reloadProfiles() {
+  try {
+    const data = await profileFetch('/api/profiles/reload', 'POST');
+    renderProfiles(data);
+    const warnings = data.load_warnings || [];
+    setProfileMsg(warnings.length ? warnings.join(' ') : 'config.json reloaded.', warnings.length ? 'warn' : '');
+    scheduleProfileHistory();
+  } catch (err) {
+    setProfileMsg(err.message, 'bad');
+  }
+}
+
+// setupProfiles wires the header switcher and the profiles panel. The panel's
+// buttons are drawn by renderProfiles, so their clicks are caught on the grid.
+function setupProfiles() {
+  $('profile-select').addEventListener('change', e => activateProfile(e.target.value));
+  $('profile-reload').addEventListener('click', reloadProfiles);
+  $('profile-grid').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    btn.disabled = true;
+    if (btn.dataset.act === 'use') {
+      activateProfile(btn.dataset.id);
+    } else {
+      duplicateProfile(btn.dataset.id);
+    }
+  });
+  // The profile may have changed while this tab was hidden, so refresh on return.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      fetchProfiles();
+      fetchProfileHistory();
+    }
+  });
+  // Shares of the log range move as time passes, so the banner is refreshed too.
+  setInterval(fetchProfileHistory, 30000);
+}
+
 function init() {
   setupTheme();
   setupExport();
   setupUpdateManager();
   setupResetManager();
+  setupProfiles();
 
   ['drawer', 'export', 'update-modal', 'reset-modal'].forEach(id => {
     const el = $(id);
@@ -1216,6 +1442,8 @@ function init() {
     });
   });
 
+  $('f-range').addEventListener('change', fetchProfileHistory);
+
   $('more').addEventListener('click', () => {
     F.limit += 10;
     renderLog();
@@ -1245,6 +1473,8 @@ function init() {
   fetchTargets();
   fetchStatus();
   fetchEvents();
+  fetchProfiles();
+  fetchProfileHistory();
   fetchRecentSamples();
   connectSSE();
   checkUpdateStatus();
