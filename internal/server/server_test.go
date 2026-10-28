@@ -20,10 +20,17 @@ import (
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/server"
 	"github.com/aaronburt/netscan/internal/store"
+	"github.com/aaronburt/netscan/internal/switcher"
 	"github.com/aaronburt/netscan/internal/updater"
 )
 
 func setupTestServer(t *testing.T) (*server.Server, string) {
+	return setupServer(t, true)
+}
+
+// setupServer starts a dashboard server. withProfiles decides whether it gets a
+// switcher, without which the profile routes can't change profiles.
+func setupServer(t *testing.T, withProfiles bool) (*server.Server, string) {
 	tmpDir := t.TempDir()
 	t.Setenv("NETSCAN_DATA_DIR", tmpDir) // keep the port file out of the real data dir
 	dbPath := filepath.Join(tmpDir, "srv.db")
@@ -55,6 +62,9 @@ func setupTestServer(t *testing.T) (*server.Server, string) {
 	srv, err := server.NewServer(cfg, reader, writer, det, h, sched, ne, reg, "test")
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
+	}
+	if withProfiles {
+		srv.SetProfiles(switcher.New(config.Standard(), reg, sched, det, nil, nil, nil), config.ConfigPath())
 	}
 
 	if err := srv.Start(); err != nil {

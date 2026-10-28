@@ -94,12 +94,13 @@ func TestProfileHistoryEndpoint(t *testing.T) {
 		t.Fatalf("usage = %+v, want two entries with load estimates", body.Usage)
 	}
 
-	// PUT gets past the CSRF check, which only covers POST, so this reaches the
+	// Every change needs the CSRF token. With it, the request reaches the
 	// handler's own method check.
 	req, err := http.NewRequest(http.MethodPut, url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("X-NetScan-Token", csrfToken(t, fmt.Sprintf("http://127.0.0.1:%d", srv.Port())))
 	bad, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("failed to put history: %v", err)
