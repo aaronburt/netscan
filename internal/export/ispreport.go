@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/detector"
 	"github.com/aaronburt/netscan/internal/store"
 )
@@ -15,6 +16,7 @@ func GenerateISPReport(
 	meta ExportMeta,
 	events []detector.Event,
 	stats store.StatsSummary,
+	profiles []store.ProfileUse,
 	gwIP, ispHopIP string,
 ) error {
 	fromLocal := time.UnixMilli(meta.FromMS).Local().Format(time.RFC3339)
@@ -73,7 +75,11 @@ func GenerateISPReport(
 		}
 	}
 
-	b.WriteString("3. ISP-ATTRIBUTABLE INCIDENTS (LAN VERIFIED OPERATIONAL)\n")
+	b.WriteString("3. MONITORING PROFILE\n")
+	b.WriteString("--------------------------------------------------------------------------------\n")
+	writeProfileUse(&b, profiles)
+
+	b.WriteString("4. ISP-ATTRIBUTABLE INCIDENTS (LAN VERIFIED OPERATIONAL)\n")
 	b.WriteString("--------------------------------------------------------------------------------\n")
 	if len(ispEvents) == 0 {
 		b.WriteString("No upstream ISP-attributable outages recorded during this period.\n\n")
@@ -96,7 +102,7 @@ func GenerateISPReport(
 		b.WriteString("during the drop, demonstrating failure occurred upstream on the ISP link.\n\n")
 	}
 
-	b.WriteString("4. LOCAL NETWORK / SYSTEM EVENTS (EXCLUDED FROM ISP METRICS)\n")
+	b.WriteString("5. LOCAL NETWORK / SYSTEM EVENTS (EXCLUDED FROM ISP METRICS)\n")
 	b.WriteString("--------------------------------------------------------------------------------\n")
 	if len(localEvents) == 0 {
 		b.WriteString("No local link or router drops recorded during this period.\n\n")
@@ -113,8 +119,12 @@ func GenerateISPReport(
 		b.WriteString("\n")
 	}
 
-	b.WriteString("5. BRIEF PROBE FAILURES (NOT OUTAGES, NOT ISP EVIDENCE)\n")
+	b.WriteString("6. BRIEF PROBE FAILURES (NOT OUTAGES, NOT ISP EVIDENCE)\n")
 	b.WriteString("--------------------------------------------------------------------------------\n")
+	if profileDependent(profiles) {
+		b.WriteString("Counts here depend on the monitoring profile: a profile that probes more often\n")
+		b.WriteString("sees more brief failures than one that probes less often.\n\n")
+	}
 	if len(blipEvents) == 0 {
 		b.WriteString("None recorded during this period.\n\n")
 	} else {
@@ -135,8 +145,9 @@ func GenerateISPReport(
 		b.WriteString("\n")
 	}
 
-	b.WriteString("6. MEASUREMENT METHODOLOGY & SPECIFICATION\n")
+	b.WriteString("7. MEASUREMENT METHODOLOGY & SPECIFICATION\n")
 	b.WriteString("--------------------------------------------------------------------------------\n")
+	b.WriteString("The figures below describe the Standard profile. Section 3 lists the profiles used.\n\n")
 	b.WriteString("1. High-Frequency Staggered Polling: 1000ms healthy interval, 500ms suspect mode.\n")
 	b.WriteString("2. Multi-Protocol Quorum: An outage requires concurrent failure across multiple\n")
 	b.WriteString("   independent tier-1 anycast targets (1.1.1.1, 8.8.8.8, 9.9.9.9).\n")
@@ -148,6 +159,36 @@ func GenerateISPReport(
 
 	_, err := w.Write([]byte(b.String()))
 	return err
+}
+
+// writeProfileUse lists the profiles in force during the period, with their
+// share of the time and what each one costs to run.
+func writeProfileUse(b *strings.Builder, usage []store.ProfileUse) {
+	if len(usage) == 0 {
+		b.WriteString("No profile was recorded for this period. Events from before profile history\n")
+		b.WriteString("was added are read as Standard.\n\n")
+		return
+	}
+
+	b.WriteString(fmt.Sprintf("%-22s %-8s %-10s %-10s %-22s\n", "Profile", "Share", "Probes/s", "Remote/s", "Min. detectable outage"))
+	b.WriteString(strings.Repeat("-", 80) + "\n")
+	for _, u := range usage {
+		b.WriteString(fmt.Sprintf("%-22.22s %-8s %-10.1f %-10.1f %-22s\n",
+			u.Name,
+			fmt.Sprintf("%.1f%%", u.SharePct),
+			u.Estimate.ProbesPerSec,
+			u.Estimate.RemoteProbesPerSec,
+			fmt.Sprintf("%.1fs", float64(u.Estimate.MinDetectableOutageMS)/1000)))
+	}
+	b.WriteString("\nThe two-of-three outage rule (TCP, DNS, HTTP; ICMP alone never counts) is the same under\n")
+	b.WriteString("every profile. Profiles change how quickly evidence arrives, so an outage shorter than the\n")
+	b.WriteString("minimum detectable outage may be missed or only partly seen.\n\n")
+}
+
+// profileDependent reports whether brief failures and latency counts depend on
+// the profile: more than one was used, or the one used is not Standard.
+func profileDependent(usage []store.ProfileUse) bool {
+	return len(usage) > 1 || (len(usage) == 1 && usage[0].ID != config.ProfileStandard)
 }
 
 func failedLayerNames(mask int) string {

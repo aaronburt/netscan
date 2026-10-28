@@ -5,20 +5,28 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/probe"
 )
 
 // Detector is told about a switch first, so it stops judging results from
-// the old plan.
+// the old plan. profileID is the history row the new plan is recorded under.
 type Detector interface {
-	Apply(p config.Profile)
+	Apply(p config.Profile, profileID int64)
 }
 
 // Scheduler plans from the registry it is given, so it is switched last.
 type Scheduler interface {
 	Apply(p config.Profile, reg *probe.TargetRegistry)
+}
+
+// History records which profile is in force and from when. It is called once
+// a switch is accepted, before the components change, so that the id it returns
+// is in place before the detector starts stamping events with it.
+type History interface {
+	Switch(p config.Profile, at time.Time) int64
 }
 
 // Switcher applies a profile to every component that depends on it.
@@ -28,15 +36,17 @@ type Switcher struct {
 	reg      *probe.TargetRegistry
 	sched    Scheduler
 	det      Detector
+	history  History
 	onTarget func(probe.Target)
 	onChange func(config.Profile)
 }
 
-// New returns a Switcher for components already running on current. onTarget
-// is called for every target after a switch, so new hosts get stored; onChange
-// is called once the switch is complete, and may be nil.
-func New(current config.Profile, reg *probe.TargetRegistry, sched Scheduler, det Detector, onTarget func(probe.Target), onChange func(config.Profile)) *Switcher {
-	return &Switcher{current: current, reg: reg, sched: sched, det: det, onTarget: onTarget, onChange: onChange}
+// New returns a Switcher for components already running on current. history
+// may be nil, in which case switches are not recorded. onTarget is called for
+// every target after a switch, so new hosts get stored; onChange is called once
+// the switch is complete, and may be nil.
+func New(current config.Profile, reg *probe.TargetRegistry, sched Scheduler, det Detector, history History, onTarget func(probe.Target), onChange func(config.Profile)) *Switcher {
+	return &Switcher{current: current, reg: reg, sched: sched, det: det, history: history, onTarget: onTarget, onChange: onChange}
 }
 
 // Current returns the profile in force.
@@ -63,7 +73,11 @@ func (s *Switcher) Apply(p config.Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.det.Apply(p)
+	var profileID int64
+	if s.history != nil {
+		profileID = s.history.Switch(p, time.Now().UTC())
+	}
+	s.det.Apply(p, profileID)
 	targets := s.reg.Reconfigure(p)
 	if s.onTarget != nil {
 		for _, t := range targets {

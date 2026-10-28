@@ -8,7 +8,7 @@ import (
 
 // apiRouteIDs are the path segments the profiles API uses for its own routes,
 // so a custom profile can't take one of them as its id.
-var apiRouteIDs = map[string]bool{"validate": true, "test-hosts": true, "reload": true}
+var apiRouteIDs = map[string]bool{"validate": true, "test-hosts": true, "reload": true, "history": true}
 
 // CheckCandidate runs every rule a custom profile must pass before it is saved:
 // its own rules and limits (see Validate), then whether its id is free.

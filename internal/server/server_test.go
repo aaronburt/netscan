@@ -64,7 +64,7 @@ func setupServer(t *testing.T, withProfiles bool) (*server.Server, string) {
 		t.Fatalf("failed to create server: %v", err)
 	}
 	if withProfiles {
-		srv.SetProfiles(switcher.New(config.Standard(), reg, sched, det, nil, nil), config.ConfigPath())
+		srv.SetProfiles(switcher.New(config.Standard(), reg, sched, det, nil, nil, nil), config.ConfigPath())
 	}
 
 	if err := srv.Start(); err != nil {

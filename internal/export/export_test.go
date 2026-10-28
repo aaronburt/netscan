@@ -33,7 +33,7 @@ func readCSV(t *testing.T, buf *bytes.Buffer) [][]string {
 
 func TestExportEventsCSV(t *testing.T) {
 	var buf bytes.Buffer
-	if err := export.ExportEventsCSV(&buf, sampleEvents()); err != nil {
+	if err := export.ExportEventsCSV(&buf, sampleEvents(), nil); err != nil {
 		t.Fatal(err)
 	}
 	rows := readCSV(t, &buf)
@@ -99,7 +99,7 @@ func TestGenerateISPReport(t *testing.T) {
 	var buf bytes.Buffer
 	stats := store.StatsSummary{Outages24H: 1, Outages7D: 2, Blips7D: 3, CoveragePct: 99.5}
 	meta := export.ExportMeta{FromMS: 1_700_000_000_000, ToMS: 1_700_600_000_000, AppVersion: "1.2.3", NetworkLabel: "home"}
-	if err := export.GenerateISPReport(&buf, meta, sampleEvents(), stats, "192.168.1.1", "10.0.0.1"); err != nil {
+	if err := export.GenerateISPReport(&buf, meta, sampleEvents(), stats, nil, "192.168.1.1", "10.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -110,7 +110,7 @@ func TestGenerateISPReport(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := export.GenerateISPReport(&buf, meta, nil, store.StatsSummary{}, "N/A", "N/A"); err != nil {
+	if err := export.GenerateISPReport(&buf, meta, nil, store.StatsSummary{}, nil, "N/A", "N/A"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,7 +123,7 @@ func TestISPReportKeepsBlipsOutOfISPIncidents(t *testing.T) {
 		StartMS: 1_700_000_100_000, LayersDown: detector.LayerMaskWANICMP, DurationMS: &dur, GatewayOKPct: 100,
 	}}
 	meta := export.ExportMeta{FromMS: 1_700_000_000_000, ToMS: 1_700_600_000_000}
-	if err := export.GenerateISPReport(&buf, meta, events, store.StatsSummary{Blips7D: 1}, "gw", "hop"); err != nil {
+	if err := export.GenerateISPReport(&buf, meta, events, store.StatsSummary{Blips7D: 1}, nil, "gw", "hop"); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()

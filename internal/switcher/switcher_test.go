@@ -2,6 +2,7 @@ package switcher
 
 import (
 	"testing"
+	"time"
 
 	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/probe"
@@ -21,11 +22,25 @@ func (f *fakeSched) Apply(p config.Profile, reg *probe.TargetRegistry) {
 type fakeDet struct {
 	order *[]string
 	got   config.Profile
+	id    int64
 }
 
-func (f *fakeDet) Apply(p config.Profile) {
+func (f *fakeDet) Apply(p config.Profile, profileID int64) {
 	*f.order = append(*f.order, "detector")
-	f.got = p
+	f.got, f.id = p, profileID
+}
+
+type fakeHistory struct {
+	order    *[]string
+	switched []string
+	lastID   int64
+}
+
+func (f *fakeHistory) Switch(p config.Profile, _ time.Time) int64 {
+	*f.order = append(*f.order, "history")
+	f.switched = append(f.switched, p.ID)
+	f.lastID++
+	return f.lastID
 }
 
 func TestApplySwitchesEverything(t *testing.T) {
@@ -34,9 +49,10 @@ func TestApplySwitchesEverything(t *testing.T) {
 	reg := probe.NewTargetRegistryWithIDs(std, alloc)
 	var order []string
 	sched, det := &fakeSched{order: &order}, &fakeDet{order: &order}
+	hist := &fakeHistory{order: &order}
 	var stored []probe.Target
 	var changed []string
-	sw := New(std, reg, sched, det,
+	sw := New(std, reg, sched, det, hist,
 		func(t probe.Target) { stored = append(stored, t) },
 		func(p config.Profile) { changed = append(changed, p.ID) })
 
@@ -50,8 +66,11 @@ func TestApplySwitchesEverything(t *testing.T) {
 	if det.got.ID != "home" || sched.got.ID != "home" || sched.reg != reg {
 		t.Fatalf("components not switched: det=%s sched=%s", det.got.ID, sched.got.ID)
 	}
-	if len(order) != 2 || order[0] != "detector" {
-		t.Fatalf("order = %v, want the detector cleared before the scheduler plans", order)
+	if det.id != 1 {
+		t.Fatalf("detector got profile id %d, want the one history returned (1)", det.id)
+	}
+	if len(order) != 3 || order[0] != "history" || order[1] != "detector" {
+		t.Fatalf("order = %v, want history recorded, then the detector cleared before the scheduler plans", order)
 	}
 	if len(reg.GetWANTCP()) != 2 || reg.GetWANTCP()[1].Address != "192.0.2.10:443" {
 		t.Fatalf("registry not reconfigured: %+v", reg.GetWANTCP())
@@ -73,14 +92,30 @@ func TestApplyRefusesInvalidProfile(t *testing.T) {
 	reg := probe.NewTargetRegistry(std)
 	var order []string
 	sched, det := &fakeSched{order: &order}, &fakeDet{order: &order}
-	sw := New(std, reg, sched, det, nil, nil)
+	hist := &fakeHistory{order: &order}
+	sw := New(std, reg, sched, det, hist, nil, nil)
 
 	bad := config.Standard()
 	bad.ID, bad.Mode = "bad", "sideways"
 	if err := sw.Apply(bad); err == nil {
 		t.Fatal("expected an error for an invalid mode")
 	}
-	if len(order) != 0 || sw.Current().ID != config.ProfileStandard {
+	if len(order) != 0 || len(hist.switched) != 0 || sw.Current().ID != config.ProfileStandard {
 		t.Fatalf("an invalid profile changed state: order=%v current=%s", order, sw.Current().ID)
+	}
+}
+
+func TestApplyWithoutHistoryUsesNoProfileID(t *testing.T) {
+	std := config.Standard()
+	reg := probe.NewTargetRegistry(std)
+	var order []string
+	det := &fakeDet{order: &order}
+	sw := New(std, reg, &fakeSched{order: &order}, det, nil, nil, nil)
+
+	if err := sw.Apply(config.Aggressive()); err != nil {
+		t.Fatal(err)
+	}
+	if det.got.ID != config.ProfileAggressive || det.id != 0 {
+		t.Fatalf("detector got %s with profile id %d, want aggressive with 0", det.got.ID, det.id)
 	}
 }

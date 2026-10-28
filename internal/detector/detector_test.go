@@ -613,7 +613,7 @@ func TestApplyDuringOutageHoldsUntilProbed(t *testing.T) {
 	d, _ := setupDetector(clock)
 	openOutage(t, d, clock)
 
-	d.Apply(config.Lax())
+	d.Apply(config.Lax(), 0)
 	for i := 0; i < 6; i++ {
 		clock.Advance(time.Second)
 		if _, closed := d.Tick(clock.Now()); closed != nil {
@@ -642,7 +642,7 @@ func TestOutageStaysOpenAcrossSwitchWhileStillDown(t *testing.T) {
 	d, _ := setupDetector(clock)
 	openOutage(t, d, clock)
 
-	d.Apply(config.Lax())
+	d.Apply(config.Lax(), 0)
 	for i := 0; i < 120; i++ {
 		clock.Advance(time.Second)
 		if _, closed := sendTick(d, clock, true, false, true); closed != nil {
@@ -659,7 +659,7 @@ func TestApplyClearsHostHistoryButKeepsState(t *testing.T) {
 	d, fast := setupDetector(clock)
 	openOutage(t, d, clock)
 
-	d.Apply(config.Aggressive())
+	d.Apply(config.Aggressive(), 0)
 	snap := d.GetSnapshot()
 	if snap.State != detector.StateOutage || snap.OpenEvent == nil || !*fast {
 		t.Fatalf("switch changed state: %v, open=%v, fast=%v", snap.State, snap.OpenEvent != nil, *fast)

@@ -25,6 +25,7 @@ const (
 	writeItemCoverage
 	writeItemTarget
 	writeItemNetwork
+	writeItemProfile
 )
 
 type writeItem struct {
@@ -35,6 +36,7 @@ type writeItem struct {
 	network  NetworkRecord
 	target   probe.Target
 	coverage CoverageRecord
+	profile  ProfileRecord
 }
 
 type NetworkRecord struct {
@@ -178,6 +180,7 @@ drained:
 		"DELETE FROM rollups_1m;",
 		"DELETE FROM system_events;",
 		"DELETE FROM coverage;",
+		"DELETE FROM profile_log WHERE end_ms IS NOT NULL;",
 	}
 	for _, q := range tables {
 		if _, err := tx.Exec(q); err != nil {
@@ -259,6 +262,16 @@ func (w *StoreWriter) QueueCoverage(cov CoverageRecord) {
 	item := writeItem{
 		itemType: writeItemCoverage,
 		coverage: cov,
+	}
+	w.inCh <- item
+}
+
+// QueueProfile saves a profile_log row. Saving a row again with the same id
+// updates it, which is how a row gets its end time.
+func (w *StoreWriter) QueueProfile(p ProfileRecord) {
+	item := writeItem{
+		itemType: writeItemProfile,
+		profile:  p,
 	}
 	w.inCh <- item
 }
@@ -376,6 +389,8 @@ func (w *StoreWriter) flush(batch []writeItem) {
 			w.noteError("write network", w.writeNetworkTx(tx, item.network))
 		case writeItemCoverage:
 			w.noteError("write coverage", w.writeCoverageTx(tx, item.coverage))
+		case writeItemProfile:
+			w.noteError("write profile", w.writeProfileTx(tx, item.profile))
 		}
 	}
 
@@ -576,8 +591,8 @@ func computeRollupMetrics(rtts []int64) (int64, int64, int64, int64, int64) {
 func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) error {
 	query := `INSERT INTO events (
 		id, kind, classification, network_id, start_ms, start_uncert_ms, end_ms, end_uncert_ms,
-		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context, profile_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		end_ms = excluded.end_ms,
 		end_uncert_ms = excluded.end_uncert_ms,
@@ -604,6 +619,7 @@ func (w *StoreWriter) writeEventTx(tx *sql.Tx, e detector.Event) error {
 		e.GatewayOKPct,
 		e.ISPHopOKPct,
 		e.ContextJSON,
+		nullableID(e.ProfileID),
 	)
 	return err
 }
@@ -632,6 +648,15 @@ func (w *StoreWriter) writeNetworkTx(tx *sql.Tx, n NetworkRecord) error {
 			gateway_mac = excluded.gateway_mac,
 			ssid = excluded.ssid;`
 	_, err := tx.Exec(query, n.ID, n.Fingerprint, n.GatewayIP, n.GatewayMAC, n.SSID, n.Label, n.FirstSeenMS, n.LastSeenMS)
+	return err
+}
+
+func (w *StoreWriter) writeProfileTx(tx *sql.Tx, p ProfileRecord) error {
+	query := `INSERT INTO profile_log (id, start_ms, end_ms, profile, profile_name, settings_hash, settings_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			end_ms = excluded.end_ms;`
+	_, err := tx.Exec(query, p.ID, p.StartMS, p.EndMS, p.Profile, p.ProfileName, p.SettingsHash, p.SettingsJSON)
 	return err
 }
 

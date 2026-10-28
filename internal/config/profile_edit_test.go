@@ -56,7 +56,7 @@ func TestNewProfileIDFitsTheIDRules(t *testing.T) {
 func TestCheckCandidateIDs(t *testing.T) {
 	c := config.Config{Profiles: []config.Profile{customProfile("mine")}}
 
-	for _, id := range []string{"standard", "aggressive", "lax", "validate", "test-hosts", "reload"} {
+	for _, id := range []string{"standard", "aggressive", "lax", "validate", "test-hosts", "reload", "history"} {
 		chk := c.CheckCandidate(customProfile(id), "")
 		if !hasIssue(chk.Errors, "id") {
 			t.Errorf("id %q should be reserved", id)
