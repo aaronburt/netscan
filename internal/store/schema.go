@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = "1"
+const SchemaVersion = "2"
 
 func OpenDB(path string) (*sql.DB, error) {
 	dir := filepath.Dir(path)
@@ -138,6 +138,16 @@ func InitSchema(db *sql.DB) error {
 			end_ms INTEGER,
 			end_reason TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS profile_log (
+				id INTEGER PRIMARY KEY,
+				start_ms INTEGER NOT NULL,
+				end_ms INTEGER,
+				profile TEXT NOT NULL,
+				profile_name TEXT NOT NULL,
+				settings_hash TEXT NOT NULL,
+				settings_json TEXT NOT NULL
+			);`,
+		`CREATE INDEX IF NOT EXISTS profile_log_start ON profile_log (start_ms);`,
 		`INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');`,
 	}
 
@@ -147,7 +157,26 @@ func InitSchema(db *sql.DB) error {
 		}
 	}
 
-	return nil
+	return migrateToV2(db)
+}
+
+// migrateToV2 brings a schema 1 database up to schema 2, which adds profile
+// history: events.profile_id, and the profile_log table created above. Events
+// written before it keep a NULL profile_id, which reads as Standard.
+func migrateToV2(db *sql.DB) error {
+	var hasProfileID int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'profile_id';`).Scan(&hasProfileID); err != nil {
+		return err
+	}
+	if hasProfileID == 0 {
+		if _, err := db.Exec(`ALTER TABLE events ADD COLUMN profile_id INTEGER REFERENCES profile_log (id);`); err != nil {
+			return err
+		}
+	}
+
+	_, err := db.Exec(`INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, SchemaVersion)
+	return err
 }
 
 func PartitionTableName(t time.Time) string {

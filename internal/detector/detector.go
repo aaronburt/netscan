@@ -45,6 +45,7 @@ type Detector struct {
 	postResumeUntil time.Time
 	isVPN           bool
 	networkID       int64
+	profileID       int64
 	ssid            string
 	gatewayIP       string
 	ispHopIP        string
@@ -84,11 +85,21 @@ func NewDetector(cfg config.Config, profile config.Profile, clock Clock, onFastM
 // kept: a switch is not an outage ending. Layers have no results until the
 // new plan probes them, so the detector holds its state while a switch
 // settles rather than reading those empty layers as recovery.
-func (d *Detector) Apply(profile config.Profile) {
+//
+// profileID is the profile_log row the new profile is recorded under. When it
+// differs from the current one, an open event is flagged as spanning the switch;
+// it keeps the profile it started under.
+func (d *Detector) Apply(profile config.Profile, profileID int64) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
 	d.profile = profile
+	if profileID != d.profileID {
+		d.profileID = profileID
+		if d.openEvent != nil {
+			d.openEvent.Flags |= EventFlagProfileChanged
+		}
+	}
 	d.latestResults = make(map[int]probe.ProbeResult)
 	d.singleHist = make(map[int][]probe.ProbeResult)
 	d.layerStatuses = make(map[probe.Layer]LayerStatus)
@@ -166,6 +177,14 @@ func (d *Detector) SetNextEventID(next int64) {
 	if next > d.nextEventID {
 		d.nextEventID = next
 	}
+}
+
+// SetProfileID sets the profile_log row that new events are stamped with, for
+// the profile the monitor starts on. Later switches set it through Apply.
+func (d *Detector) SetProfileID(id int64) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	d.profileID = id
 }
 
 // CloseForShutdown ends any open event as interrupted, so it isn't left
@@ -699,6 +718,7 @@ func (d *Detector) openNewEvent(kind EventKind, now time.Time) *Event {
 		LayersDown:     d.activeLayers,
 		Flags:          flags,
 		ContextJSON:    string(ctxBytes),
+		ProfileID:      d.profileID,
 	}
 
 	d.openEvent = evt
@@ -823,6 +843,7 @@ func (d *Detector) createBlipEvent(now time.Time) *Event {
 		DurationMS:     &durationMS,
 		LayersDown:     d.failedMask,
 		Flags:          flags,
+		ProfileID:      d.profileID,
 	}
 	d.computeEventReachability(evt)
 	d.lastEvent = evt

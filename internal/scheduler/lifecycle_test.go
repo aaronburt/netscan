@@ -213,7 +213,7 @@ func TestSwitchDuringOutageKeepsItOpen(t *testing.T) {
 			}
 			evtID := s.created[0].ID
 
-			s.det.Apply(target)
+			s.det.Apply(target, 0)
 			s.reg.Reconfigure(target)
 			s.sched.Apply(target, s.reg)
 

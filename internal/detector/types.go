@@ -96,9 +96,10 @@ const (
 )
 
 const (
-	EventFlagInterrupted = 1 << 0
-	EventFlagPostResume  = 1 << 1
-	EventFlagVPN         = 1 << 2
+	EventFlagInterrupted    = 1 << 0
+	EventFlagPostResume     = 1 << 1
+	EventFlagVPN            = 1 << 2
+	EventFlagProfileChanged = 1 << 3
 )
 
 type Event struct {
@@ -116,6 +117,7 @@ type Event struct {
 	GatewayOKPct   float64        `json:"gateway_ok_pct"`
 	ISPHopOKPct    float64        `json:"isp_hop_ok_pct"`
 	ContextJSON    string         `json:"context,omitempty"`
+	ProfileID      int64          `json:"profile_id,omitempty"` // profile_log row the event started under; 0 if none was recorded
 }
 
 // Clone returns a deep copy of e, or nil when e is nil.

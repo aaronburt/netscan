@@ -226,6 +226,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/update/restart", s.handleUpdateRestart)
 	mux.HandleFunc("/api/history/reset", s.handleResetHistory)
+	mux.HandleFunc("/api/profiles/history", s.handleProfileHistory)
 }
 
 func (s *Server) handleResetHistory(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +497,39 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"resumed"}`))
 }
 
+// handleProfileHistory returns the profile log for a period, and how much of the
+// period each profile covered. The period defaults to the last seven days.
+func (s *Server) handleProfileHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	now := time.Now().UTC()
+	fromMS := now.AddDate(0, 0, -7).UnixMilli()
+	toMS := now.UnixMilli()
+	if v, err := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64); err == nil {
+		fromMS = v
+	}
+	if v, err := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64); err == nil {
+		toMS = v
+	}
+
+	profiles, err := s.storeReader.QueryProfiles(fromMS, toMS)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from_ms":  fromMS,
+		"to_ms":    toMS,
+		"profiles": profiles,
+		"usage":    store.SummarizeProfiles(profiles, fromMS, toMS),
+	})
+}
+
 func (s *Server) handleExportISPReport(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	toMS := now.UnixMilli()
@@ -503,6 +537,8 @@ func (s *Server) handleExportISPReport(w http.ResponseWriter, r *http.Request) {
 
 	events, _ := s.storeReader.QueryEvents(store.EventFilter{FromMS: fromMS, ToMS: toMS, Limit: 1000})
 	stats, _ := s.storeReader.QueryStats(now)
+	profiles, _ := s.storeReader.QueryProfiles(fromMS, toMS)
+	usage := store.SummarizeProfiles(profiles, fromMS, toMS)
 
 	meta := export.ExportMeta{
 		FromMS:       fromMS,
@@ -520,7 +556,7 @@ func (s *Server) handleExportISPReport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"netscan-isp-evidence-report.txt\"")
-	_ = export.GenerateISPReport(w, meta, events, stats, gwStr, "Detected ISP Gateway")
+	_ = export.GenerateISPReport(w, meta, events, stats, usage, gwStr, "Detected ISP Gateway")
 }
 
 func (s *Server) handleExportEventsCSV(w http.ResponseWriter, _ *http.Request) {
@@ -530,7 +566,8 @@ func (s *Server) handleExportEventsCSV(w http.ResponseWriter, _ *http.Request) {
 	events, _ := s.storeReader.QueryEvents(store.EventFilter{FromMS: fromMS, ToMS: now.UnixMilli(), Limit: 5000})
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"netscan-events-7d.csv\"")
-	_ = export.ExportEventsCSV(w, events)
+	profiles, _ := s.storeReader.QueryProfiles(fromMS, now.UnixMilli())
+	_ = export.ExportEventsCSV(w, events, profiles)
 }
 
 func (s *Server) handleExportSamplesCSV(w http.ResponseWriter, _ *http.Request) {

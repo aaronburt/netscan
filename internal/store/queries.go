@@ -103,7 +103,7 @@ func (r *StoreReader) QueryEvents(filter EventFilter) ([]detector.Event, error) 
 
 	query := fmt.Sprintf(`SELECT
 		id, kind, classification, network_id, start_ms, start_uncert_ms, end_ms, end_uncert_ms,
-		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context
+		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context, profile_id
 	FROM events
 	WHERE %s
 	ORDER BY start_ms DESC
@@ -122,6 +122,7 @@ func (r *StoreReader) QueryEvents(filter EventFilter) ([]detector.Event, error) 
 		var endMS, endUncert, duration sql.NullInt64
 		var gwPct, ispPct sql.NullFloat64
 		var ctxStr sql.NullString
+		var profileID sql.NullInt64
 
 		if err := rows.Scan(
 			&e.ID,
@@ -138,6 +139,7 @@ func (r *StoreReader) QueryEvents(filter EventFilter) ([]detector.Event, error) 
 			&gwPct,
 			&ispPct,
 			&ctxStr,
+			&profileID,
 		); err != nil {
 			return nil, err
 		}
@@ -163,6 +165,10 @@ func (r *StoreReader) QueryEvents(filter EventFilter) ([]detector.Event, error) 
 			e.ContextJSON = ctxStr.String
 		}
 
+		if profileID.Valid {
+			e.ProfileID = profileID.Int64
+		}
+
 		events = append(events, e)
 	}
 
@@ -172,7 +178,7 @@ func (r *StoreReader) QueryEvents(filter EventFilter) ([]detector.Event, error) 
 func (r *StoreReader) QueryEventByID(id int64) (*EventDetail, error) {
 	query := `SELECT
 		id, kind, classification, network_id, start_ms, start_uncert_ms, end_ms, end_uncert_ms,
-		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context
+		duration_ms, layers_down, flags, gateway_ok_pct, isp_hop_ok_pct, context, profile_id
 	FROM events WHERE id = ?;`
 
 	row := r.db.QueryRow(query, id)
@@ -182,6 +188,7 @@ func (r *StoreReader) QueryEventByID(id int64) (*EventDetail, error) {
 	var endMS, endUncert, duration sql.NullInt64
 	var gwPct, ispPct sql.NullFloat64
 	var ctxStr sql.NullString
+	var profileID sql.NullInt64
 
 	if err := row.Scan(
 		&e.ID,
@@ -198,6 +205,7 @@ func (r *StoreReader) QueryEventByID(id int64) (*EventDetail, error) {
 		&gwPct,
 		&ispPct,
 		&ctxStr,
+		&profileID,
 	); err != nil {
 		return nil, err
 	}
@@ -221,6 +229,10 @@ func (r *StoreReader) QueryEventByID(id int64) (*EventDetail, error) {
 	}
 	if ctxStr.Valid {
 		e.ContextJSON = ctxStr.String
+	}
+
+	if profileID.Valid {
+		e.ProfileID = profileID.Int64
 	}
 
 	margin := int64(30000)

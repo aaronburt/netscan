@@ -232,6 +232,13 @@ func main() {
 	storeWriter := store.NewStoreWriter(db, cfg)
 	storeReader := store.NewStoreReader(db)
 
+	startedAt := time.Now().UTC()
+	profileHistory, err := store.NewProfileHistory(db, storeWriter, startedAt)
+	if err != nil {
+		logger.Error("failed to start profile history", "error", err)
+		os.Exit(1)
+	}
+
 	known, err := storeReader.KnownTargets()
 	if err != nil {
 		logger.Warn("could not read known targets", "error", err)
@@ -253,6 +260,7 @@ func main() {
 			sched.SetFastMode(fast)
 		}
 	})
+	det.SetProfileID(profileHistory.Switch(profile, startedAt))
 	if maxID, err := storeReader.MaxEventID(); err != nil {
 		logger.Warn("could not read last event id", "error", err)
 	} else {
@@ -276,7 +284,7 @@ func main() {
 
 	// The processor loop follows the profile's tick; a switch sends the new one.
 	tickCh := make(chan time.Duration, 1)
-	profileSwitcher := switcher.New(profile, registry, sched, det, storeWriter.QueueTarget, func(p config.Profile) {
+	profileSwitcher := switcher.New(profile, registry, sched, det, profileHistory, storeWriter.QueueTarget, func(p config.Profile) {
 		logger.Info("polling profile switched", "id", p.ID, "name", p.Name, "mode", p.Mode)
 		select {
 		case <-tickCh:
@@ -316,6 +324,7 @@ func main() {
 				storeWriter.QueueEvent(*evt)
 				h.PublishEvent(*evt)
 			}
+			profileHistory.Close(time.Now().UTC())
 			rootCancel()
 			if !supervisor.Stop(5 * time.Second) {
 				logger.Warn("components did not stop in time")

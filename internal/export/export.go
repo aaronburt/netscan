@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/aaronburt/netscan/internal/config"
 	"github.com/aaronburt/netscan/internal/detector"
 	"github.com/aaronburt/netscan/internal/store"
 )
@@ -20,14 +21,19 @@ type ExportMeta struct {
 	NetworkLabel string `json:"network_label,omitempty"`
 }
 
-func ExportEventsCSV(w io.Writer, events []detector.Event) error {
+func ExportEventsCSV(w io.Writer, events []detector.Event, profiles []store.ProfileRecord) error {
+	names := make(map[int64]string, len(profiles))
+	for _, p := range profiles {
+		names[p.ID] = p.ProfileName
+	}
+
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 
 	header := []string{
 		"id", "kind", "classification", "start_iso", "start_ts_ms",
 		"end_iso", "end_ts_ms", "duration_ms", "start_uncert_ms",
-		"end_uncert_ms", "gateway_ok_pct", "isp_hop_ok_pct", "layers_down", "flags",
+		"end_uncert_ms", "gateway_ok_pct", "isp_hop_ok_pct", "layers_down", "flags", "profile",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -65,6 +71,7 @@ func ExportEventsCSV(w io.Writer, events []detector.Event) error {
 			fmt.Sprintf("%.1f", e.ISPHopOKPct),
 			strconv.Itoa(e.LayersDown),
 			strconv.Itoa(e.Flags),
+			eventProfileName(e.ProfileID, names),
 		}
 		if err := cw.Write(row); err != nil {
 			return err
@@ -72,6 +79,18 @@ func ExportEventsCSV(w io.Writer, events []detector.Event) error {
 	}
 
 	return nil
+}
+
+// eventProfileName names the profile an event started under. Events recorded
+// before profile history have no profile and read as Standard.
+func eventProfileName(id int64, names map[int64]string) string {
+	if id == 0 {
+		return config.Standard().Name
+	}
+	if name, ok := names[id]; ok {
+		return name
+	}
+	return "unknown"
 }
 
 func ExportSamplesCSV(w io.Writer, samples []store.SampleRecord) error {
