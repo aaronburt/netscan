@@ -908,13 +908,27 @@ function setupExport() {
     if (!dlg.open) dlg.showModal();
   });
 
+  // The report has its own period choice; the other formats use the scope.
+  const syncFormat = () => {
+    const fmt = document.querySelector('input[name="fmt"]:checked')?.value || 'report';
+    const isReport = fmt === 'report';
+    $('ex-period').hidden = !isReport;
+    $('ex-scope').hidden = isReport;
+    $('ex-go').textContent = isReport ? 'Open report' : 'Download';
+  };
+  document.querySelectorAll('input[name="fmt"]').forEach(el => el.addEventListener('change', syncFormat));
+  syncFormat();
+
   $('ex-close').addEventListener('click', () => dlg.close());
   $('ex-cancel').addEventListener('click', () => dlg.close());
 
   $('ex-go').addEventListener('click', () => {
-    const fmt = document.querySelector('input[name="fmt"]:checked')?.value || 'isp';
+    const fmt = document.querySelector('input[name="fmt"]:checked')?.value || 'report';
     let url = '/api/export/isp-report.txt';
-    if (fmt === 'csv_events') url = '/api/export/events.csv';
+    if (fmt === 'report') {
+      const period = document.querySelector('input[name="period"]:checked')?.value || '7d';
+      url = '/api/export/report.html?period=' + encodeURIComponent(period);
+    } else if (fmt === 'csv_events') url = '/api/export/events.csv';
     else if (fmt === 'csv_samples') url = '/api/export/samples.csv';
     else if (fmt === 'json') url = '/api/export/rollups.json';
 

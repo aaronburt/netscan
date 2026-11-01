@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aaronburt/netscan/internal/detector"
+	"github.com/aaronburt/netscan/internal/netenv"
 	"github.com/aaronburt/netscan/internal/probe"
 )
 
@@ -412,6 +413,31 @@ func (r *StoreReader) findMatchingPartitionTables(fromMS, toMS int64) ([]string,
 }
 
 func (r *StoreReader) QueryRollups(fromMS, toMS int64, targetID int, layer string) ([]RollupRecord, error) {
+	var records []RollupRecord
+	err := r.rollupRows(fromMS, toMS, targetID, layer, func(row RollupRow) {
+		records = append(records, row.RollupRecord)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// RollupRow is a one-minute summary with the address of the target it belongs
+// to, which the report prints beside each check.
+type RollupRow struct {
+	RollupRecord
+	Address string
+}
+
+// ForEachRollup calls fn for every one-minute summary in [fromMS, toMS], oldest
+// first, without holding them all in memory. A month of summaries is hundreds
+// of thousands of rows, which the report folds into totals as they arrive.
+func (r *StoreReader) ForEachRollup(fromMS, toMS int64, fn func(RollupRow)) error {
+	return r.rollupRows(fromMS, toMS, 0, "", fn)
+}
+
+func (r *StoreReader) rollupRows(fromMS, toMS int64, targetID int, layer string, fn func(RollupRow)) error {
 	where := []string{"r.bucket_ms >= ?", "r.bucket_ms <= ?"}
 	args := []any{fromMS, toMS}
 
@@ -427,7 +453,7 @@ func (r *StoreReader) QueryRollups(fromMS, toMS int64, targetID int, layer strin
 	query := fmt.Sprintf(`SELECT
 		r.bucket_ms, r.target_id, r.sent, r.reached, r.ok, r.flagged,
 		r.min_us, r.p50_us, r.p95_us, r.max_us, r.jitter_us,
-		COALESCE(t.label, ''), COALESCE(t.layer, '')
+		COALESCE(t.label, ''), COALESCE(t.layer, ''), COALESCE(t.address, '')
 	FROM rollups_1m r
 	LEFT JOIN targets t ON t.id = r.target_id
 	WHERE %s
@@ -435,15 +461,14 @@ func (r *StoreReader) QueryRollups(fromMS, toMS int64, targetID int, layer strin
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	var records []RollupRecord
 	for rows.Next() {
-		var rr RollupRecord
+		var rr RollupRow
 		var min, p50, p95, max, jitter sql.NullInt64
-		var label, layerStr sql.NullString
+		var label, layerStr, address sql.NullString
 
 		if err := rows.Scan(
 			&rr.BucketMS,
@@ -459,8 +484,9 @@ func (r *StoreReader) QueryRollups(fromMS, toMS int64, targetID int, layer strin
 			&jitter,
 			&label,
 			&layerStr,
+			&address,
 		); err != nil {
-			return nil, err
+			return err
 		}
 
 		if min.Valid {
@@ -484,16 +510,45 @@ func (r *StoreReader) QueryRollups(fromMS, toMS int64, targetID int, layer strin
 		if layerStr.Valid {
 			rr.Layer = layerStr.String
 		}
+		if address.Valid {
+			rr.Address = address.String
+		}
 
 		if rr.Sent > 0 {
 			failed := rr.Sent - rr.OK
 			rr.LossPct = (float64(failed) / float64(rr.Sent)) * 100.0
 		}
 
-		records = append(records, rr)
+		fn(rr)
 	}
 
-	return records, nil
+	return rows.Err()
+}
+
+// QuerySystemEvents returns the system events (sleep gaps, gateway and ISP hop
+// changes) with a timestamp in [fromMS, toMS], oldest first. The writer has
+// always recorded them; the report is the first thing to read them back.
+func (r *StoreReader) QuerySystemEvents(fromMS, toMS int64) ([]netenv.SystemEvent, error) {
+	rows, err := r.db.Query(`SELECT id, ts_ms, kind, COALESCE(detail, '')
+		FROM system_events
+		WHERE ts_ms >= ? AND ts_ms <= ?
+		ORDER BY ts_ms ASC, id ASC;`, fromMS, toMS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []netenv.SystemEvent{}
+	for rows.Next() {
+		var e netenv.SystemEvent
+		var kind string
+		if err := rows.Scan(&e.ID, &e.Timestamp, &kind, &e.Detail); err != nil {
+			return nil, err
+		}
+		e.Kind = netenv.SystemEventKind(kind)
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 type StatsSummary struct {

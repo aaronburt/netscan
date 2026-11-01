@@ -190,7 +190,22 @@
       </button>
     </div>
     <div class="dlg-b">
-      <fieldset class="opts">
+      <fieldset class="opts" id="ex-period">
+        <h4 style="margin:0">Report period</h4>
+        <label class="opt">
+          <input type="radio" name="period" value="24h">
+          <span><b>Last 24 hours</b></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="period" value="7d" checked>
+          <span><b>Last 7 days</b></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="period" value="30d">
+          <span><b>Last 30 days</b></span>
+        </label>
+      </fieldset>
+      <fieldset class="opts" id="ex-scope">
         <h4 style="margin:0">What to export</h4>
         <label class="opt">
           <input type="radio" name="scope" value="filtered" checked>
@@ -204,7 +219,11 @@
       <fieldset class="opts">
         <h4 style="margin:0">Format</h4>
         <label class="opt">
-          <input type="radio" name="fmt" value="isp" checked>
+          <input type="radio" name="fmt" value="report" checked>
+          <span><b>Full report (PDF)</b><small>A printable report with charts, the outage log and the numbers behind it. Opens in a new tab: use Print, then Save as PDF</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="fmt" value="isp">
           <span><b>ISP evidence report (.txt)</b><small>Formal diagnostic report formatted with LAN vs WAN isolation proof</small></span>
         </label>
         <label class="opt">

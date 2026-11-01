@@ -134,3 +134,49 @@ func TestSmokePauseAndResume(t *testing.T) {
 		t.Fatalf("POST without token: status %d, want 403", res.StatusCode)
 	}
 }
+
+func TestExportReport(t *testing.T) {
+	srv, baseURL := setupTestServer(t)
+	defer srv.Stop()
+
+	for _, period := range []string{"", "24h", "7d", "30d"} {
+		url := baseURL + "/api/export/report.html"
+		if period != "" {
+			url += "?period=" + period
+		}
+		res, body := smokeGet(t, url)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("period %q: status %d: %s", period, res.StatusCode, body)
+		}
+		if ct := res.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("period %q: content type %q", period, ct)
+		}
+		if res.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("period %q: report may be cached", period)
+		}
+		if res.Header.Get("Content-Disposition") != "" {
+			t.Errorf("period %q: report should open inline", period)
+		}
+		if !strings.Contains(string(body), "Connection stability report") || !strings.HasSuffix(strings.TrimSpace(string(body)), "</html>") {
+			t.Errorf("period %q: not a complete report page", period)
+		}
+	}
+
+	res, _ := smokeGet(t, baseURL+"/api/export/report.html?period=7d&download=1")
+	if cd := res.Header.Get("Content-Disposition"); cd != `attachment; filename="netscan-report-7d.html"` {
+		t.Errorf("download header = %q", cd)
+	}
+
+	if res, _ := smokeGet(t, baseURL+"/api/export/report.html?period=1y"); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("bad period: status %d, want 400", res.StatusCode)
+	}
+
+	resp, err := http.Post(baseURL+"/api/export/report.html", "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("POST was accepted")
+	}
+}
