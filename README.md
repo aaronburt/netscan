@@ -144,6 +144,12 @@ Open the dashboard in your browser:
 
 Right-click the tray icon and untick **Enable WebUI** to stop serving the dashboard. It takes effect immediately, is remembered across restarts (`"http": {"enabled": false}` in `config.json`), and probing and recording carry on as before. The dashboard-related tray items are greyed out while it is off.
 
+### PDF Report
+
+**Export → Full report (PDF)** in the dashboard opens a printable report in a new tab, for the last 24 hours, 7 days or 30 days. It has a summary, a timeline and heatmap of the outages, what caused them, speed and latency charts, the full outage log, which profile was running, and a plain description of how outages are decided. Use the **Print or save as PDF** button (or your browser's print command) and choose **Save as PDF**; the page is laid out as A4 sheets with the page breaks already placed. **Download page** saves the same report as one self-contained HTML file.
+
+The report is also served at `http://127.0.0.1:<port>/api/export/report.html?period=24h|7d|30d` (add `&download=1` to save it). It reads the same database as the dashboard, so it only covers what NetScan recorded: one-minute summaries are kept 30 days and events 90. Latency figures for a whole period are estimated from those summaries. Packet-coverage is shown as "Not recorded" because it is not tracked yet.
+
 ### Checking & Installing Updates
 
 Check GitHub for available releases:

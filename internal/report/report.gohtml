@@ -1,0 +1,256 @@
+{{- /* The report document. One .sheet is one A4 page; the page plan is in paginate.go. */ -}}
+{{define "open"}}<div class="sheet-frame"><section class="sheet" aria-label="Page {{.N}} of {{.R.TotalPages}}: {{.Where}}"><div class="pad">{{if not .Mast}}<div class="runhead"><span class="brand">{{logo 18}}NetScan</span><span class="where">Connection stability report &middot; {{.R.ShortPeriod}} &middot; {{.Where}}</span></div>{{end}}{{end}}
+
+{{define "close"}}</div><div class="foot"><span>NetScan {{.R.VersionText}} &middot; generated {{.R.GeneratedShort}} &middot; times shown as {{.R.Zone}}</span><span>Page {{.N}} of {{.R.TotalPages}}</span></div></section></div>{{end}}
+
+{{define "isptable"}}<table class="t log fixed"><caption>{{.Caption}}</caption><colgroup><col style="width:36px"><col style="width:122px"><col style="width:84px"><col style="width:30px"><col style="width:30px"><col style="width:30px"><col style="width:30px"><col style="width:30px"><col style="width:124px"><col style="width:68px"><col style="width:44px"><col></colgroup>
+<thead><tr class="g"><th colspan="3"></th><th colspan="5" class="grp">Checks that failed</th><th colspan="4"></th></tr>
+<tr><th>ID</th><th>Started</th><th class="r">Lasted</th><th class="c dc">ISP</th><th class="c dc">Ping</th><th class="c dc">TCP</th><th class="c dc">DNS</th><th class="c dc">HTTP</th><th>Cause</th><th class="r">Router<br>answered</th><th class="r">Start<br>&plusmn;</th><th>Profile</th></tr></thead>
+<tbody>{{range .Rows}}<tr><td class="id">{{.ID}}</td><td>{{$.R.WhenCell .StartMS}}</td><td class="r">{{lasted .}}</td>{{checks . false}}<td>{{causePill .Cause}}</td>{{routerCell .}}<td class="r">{{uncert .}}</td><td>{{$.R.ProfCell .}}</td></tr>{{end}}</tbody></table>{{end}}
+
+{{define "localtable"}}<table class="t log fixed"><caption>{{.Caption}}</caption><colgroup><col style="width:36px"><col style="width:122px"><col style="width:84px"><col style="width:27px"><col style="width:41px"><col style="width:27px"><col style="width:27px"><col style="width:27px"><col style="width:27px"><col style="width:27px"><col><col style="width:72px"></colgroup>
+<thead><tr class="g"><th colspan="3"></th><th colspan="7" class="grp">Checks that failed</th><th colspan="2"></th></tr>
+<tr><th>ID</th><th>Started</th><th class="r">Lasted</th><th class="c dc">Link</th><th class="c dc">Router</th><th class="c dc">ISP</th><th class="c dc">Ping</th><th class="c dc">TCP</th><th class="c dc">DNS</th><th class="c dc">HTTP</th><th>Why it counts as local</th><th>Profile</th></tr></thead>
+<tbody>{{range .Rows}}<tr><td class="id">{{.ID}}</td><td>{{$.R.WhenCell .StartMS}}</td><td class="r">{{lasted .}}</td>{{checks . true}}<td class="wrap why">{{.Why}}</td><td>{{$.R.ProfCell .}}</td></tr>{{end}}</tbody></table>{{end}}
+
+{{define "p1"}}{{template "open" (pg . 1 "Summary" true)}}
+<header class="mast">
+  <div>
+    <div class="eyebrow">{{logo 24}}NetScan</div>
+    <h1>Connection stability report</h1>
+    <div class="period">{{.PeriodText}}</div>
+  </div>
+  <div class="side">Generated {{.GeneratedText}}<br>NetScan {{.VersionText}}</div>
+</header>
+<dl class="meta">
+  <div><dt>Network</dt><dd>{{if .Network.Interface}}{{.Network.Interface}}{{else}}Unknown{{end}}{{if .Network.ID}} <span class="mono dim">&middot; ID {{.Network.ID}}</span>{{end}}</dd></div>
+  <div><dt>Router (gateway)</dt><dd class="mono">{{if .Network.GatewayIP}}{{.Network.GatewayIP}}{{else}}Unknown{{end}}</dd></div>
+  <div><dt>ISP first hop</dt><dd class="mono">{{if .Network.ISPHopIP}}{{.Network.ISPHopIP}}{{else}}Not found{{end}}</dd></div>
+  <div><dt>Time zone</dt><dd>{{.Zone}}</dd></div>
+  <div><dt>VPN</dt><dd>{{if .Network.VPN}}In use now{{else}}Not in use{{end}}</dd></div>
+  <div><dt>Profiles used</dt><dd>{{.ProfilesText}}</dd></div>
+</dl>
+<div class="verdict">
+  <h2>{{.Headline}}</h2>
+  <p>{{.Summary}}</p>
+</div>
+<div class="kpis">
+  <div class="kpi"><div class="l">Uptime</div><div class="v">{{if .NoData}}n/a{{else}}{{uptime .UptimePct .OfflineMS}}<small>%</small>{{end}}</div><div class="s">of the monitored time had no outage<sup>1</sup></div></div>
+  <div class="kpi"><div class="l">Outages</div><div class="v">{{len .Outages}}</div><div class="s">{{.OutageSub}}</div></div>
+  <div class="kpi"><div class="l">Time offline</div><div class="v">{{big .OfflineMS}}</div><div class="s">{{printf "%.2f" .OfflinePct}}% of the period</div></div>
+  <div class="kpi"><div class="l">Longest outage</div>{{with .Longest}}<div class="v">{{big .DurMS}}</div><div class="s">{{$.DayShort .StartMS}} at {{$.HM .StartMS}}</div>{{else}}<div class="v">&ndash;</div><div class="s">no outages</div>{{end}}</div>
+</div>
+<div class="stats">
+  <div><div class="l">Brief failures</div><div class="v">{{len .Blips}}</div><div class="s">counted, not outages</div></div>
+  <div><div class="l">Slow spells</div><div class="v">{{len .Slow}}</div><div class="s">{{.SlowSub}}</div></div>
+  <div><div class="l">Internet latency</div>{{if .Latency.Have}}<div class="v">{{ms .Latency.MedianMS}} ms</div><div class="s">median &middot; slowest 5% {{ms .Latency.P95MS}} ms</div>{{else}}<div class="v">No data</div><div class="s">no ping times recorded</div>{{end}}</div>
+  <div><div class="l">Probe loss</div><div class="v">{{printf "%.2f" .LossPct}}%</div><div class="s">of {{count .Sent}} probes</div></div>
+  <div><div class="l">Known gaps</div><div class="v">{{.GapText}}</div><div class="s">PC asleep, not monitored</div></div>
+  <div class="na"><div class="l">Coverage</div><div class="v">Not recorded</div><div class="s">NetScan does not log when it runs yet<sup>1</sup></div></div>
+</div>
+<div class="sec">
+  <div class="sec-h"><h2>The period at a glance</h2><span class="n">taller tick = longer outage</span></div>
+  <figure>{{.TimelineSVG}}
+    <div class="legend"><span><i class="sw tick" style="background:#B42318"></i>Outage not caused locally</span><span><i class="sw tick" style="background:#3B4654"></i>Local or system event</span>{{range .ProfileLegend}}<span>{{profileSwatch .}}{{.Name}} profile</span>{{end}}<span><i class="sw hatch"></i>Gap in monitoring</span></div>
+  </figure>
+</div>
+{{if .Findings}}<div class="sec">
+  <div class="sec-h"><h2>What stands out</h2></div>
+  <ul class="find">{{range .Findings}}<li><span>{{markup .}}</span></li>{{end}}</ul>
+</div>{{end}}
+<div class="sec">
+  <div class="sec-h"><h2>In this report</h2></div>
+  <ol class="toc">
+    <li><b>2</b><span><strong>Outages in detail</strong>When, how long and what failed</span></li>
+    <li><b>3</b><span><strong>Speed and checks</strong>Round-trip times and every check</span></li>
+    <li><b>4</b><span><strong>How this was measured</strong>Profiles, the outage rule, gaps</span></li>
+    <li><b>{{.LogRange}}</b><span><strong>Outage log</strong>Every outage, one row each</span></li>
+  </ol>
+</div>
+<p class="fn" style="margin-top:auto"><b>1</b> Uptime is 100% minus the time offline{{if .StartsLate}}, counted from {{.DataFromText}}, when NetScan's data for this period begins{{end}}. NetScan does not record when it is running yet, so time with it switched off or paused counts as up, and the share of the period that was monitored cannot be stated.{{if .Gaps}} The gaps above are the only unmonitored time the app knows about.{{end}}{{if .Truncated}} This period held more events than a report reads, so the oldest are left out.{{end}}</p>
+{{template "close" (pg . 1 "" true)}}{{end}}
+
+{{define "p2"}}{{template "open" (pg . 2 "Outages" false)}}
+<div class="pg-title"><h1>Outages in detail</h1><p>An outage is two or more of TCP, DNS and HTTP failing together, or the router not answering. A single check failing and recovering is a brief failure: it is counted, not drawn as an outage.</p></div>
+<div class="sec">
+  <div class="sec-h"><h2>When they happened</h2><span class="n">outage time in each 15-minute block</span></div>
+  <figure>{{.HeatmapSVG}}
+    <div class="legend"><span class="ramp"><i style="background:#E8ECF2"></i><i style="background:#BDD1F6"></i><i style="background:#80A7EC"></i><i style="background:#3F72D8"></i><i style="background:#1B3F9C"></i></span><span>none, under 5 s, under 30 s, under 3 min, 3 min or more</span><span><svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true" style="margin-right:-1px"><path d="M0 0h9L4.5 7z" fill="#0F1720"/></svg>Local or system event</span><span><i class="sw hatch"></i>Gap in monitoring</span></div>
+  </figure>
+</div>
+<div class="cols2">
+  <div class="sec"><div class="sec-h"><h3>Time offline each {{if .Hours}}hour{{else}}day{{end}}</h3></div><figure>{{.DailySVG}}</figure></div>
+  <div class="sec"><div class="sec-h"><h3>How long outages lasted</h3></div><figure>{{.LengthSVG}}</figure></div>
+</div>
+<div class="sec">
+  <div class="sec-h"><h2>What caused them</h2><span class="n">cause labels as on the dashboard</span></div>
+  <table class="t fixed"><caption>Outages by cause</caption><colgroup><col><col style="width:90px"><col style="width:130px"><col style="width:130px"><col style="width:140px"></colgroup>
+    <thead><tr><th>Cause</th><th class="r">Outages</th><th class="r">Time offline</th><th class="r">Longest</th><th class="r">Router answered</th></tr></thead>
+    <tbody>{{range .Causes}}<tr><td>{{causePill .Cause}}</td><td class="r">{{.Count}}</td><td class="r">{{dur .TotalMS}}</td><td class="r">{{dur .LongestMS}}</td><td class="r">{{if .RouterKnown}}{{pct .RouterPct}}{{else}}n/a{{end}}</td></tr>{{else}}<tr><td colspan="5" class="dim">No outages in this period.</td></tr>{{end}}</tbody></table>
+  <p class="fn">Router answered is the share of the router's own probes that got a reply while the outage lasted, averaged over the outages in the row. NetScan points past the router only when that is 90% or more; {{.RouterOK}} of the {{len .Outages}} outages met it. Local events are kept out of the ISP-side rows.</p>
+</div>
+<div class="sec">
+  <div class="sec-h"><h2>{{.TopTitle}}</h2><span class="n">also in the log, pages {{.LogRange}}</span></div>
+  {{if .TopFive}}{{template "isptable" (tbl . .TopFive .TopTitle)}}{{else}}<div class="empty-row">No outages in this period.</div>{{end}}
+</div>
+{{template "close" (pg . 2 "" false)}}{{end}}
+
+{{define "p3"}}{{template "open" (pg . 3 "Speed and checks" false)}}
+<div class="pg-title"><h1>Speed and checks</h1><p>Round-trip times come from the one-minute summaries NetScan keeps of every probe. The router line shows whether the local network stayed fast while the internet side moved.</p></div>
+<div class="sec">
+  <div class="sec-h"><h2>Round-trip time across the period</h2><span class="n">{{.LatStepText}}</span></div>
+  <figure>{{.LatencySVG}}
+    <div class="legend"><span><i class="sw line" style="background:#B83F86"></i>Internet, median</span><span><i class="sw" style="background:#B83F86;opacity:.18"></i>Internet, slowest 5%</span><span><i class="sw line" style="background:#2F6FD0"></i>Router, median</span><span><i class="sw tick" style="background:#B42318"></i>Outage</span><span><i class="sw hatch"></i>Gap in monitoring</span></div>
+  </figure>
+</div>
+<div class="cols2">
+  <div class="sec"><div class="sec-h"><h3>Internet speed by time of day</h3></div><figure>{{.HourSVG}}</figure>{{with .HourNote}}<p class="fn">{{.}}</p>{{end}}</div>
+  <div class="sec"><div class="sec-h"><h3>Slow spells</h3><span class="n">{{len .Slow}} in the period, not outages</span></div>
+    {{if .SlowShown}}<table class="t dense"><caption>High-latency episodes</caption><thead><tr><th>Started</th><th class="r">Lasted</th><th>Where</th></tr></thead><tbody>{{range .SlowShown}}<tr><td>{{$.DayShort .StartMS}}, {{$.HM .StartMS}}</td><td class="r">{{dur .DurMS}}</td><td>{{.Where}}</td></tr>{{end}}</tbody></table>{{if .SlowMore}}<p class="fn">and {{.SlowMore}} more, in the events CSV.</p>{{end}}{{else}}<div class="empty-row">No slow spells in this period.</div>{{end}}
+    <p class="fn">Latency well above NetScan's own recent baseline while the checks still pass.</p></div>
+</div>
+<div class="sec">
+  <div class="sec-h"><h2>Every check, over the period</h2><span class="n">times in ms</span></div>
+  {{if .Checks}}<table class="t dense fixed"><caption>Per-check results</caption><colgroup><col style="width:92px"><col><col style="width:70px"><col style="width:80px"><col style="width:62px"><col style="width:80px"><col style="width:64px"><col style="width:54px"></colgroup>
+    <thead><tr><th>Check</th><th>Target</th><th class="r">Probes</th><th class="r">Succeeded</th><th class="r">Median</th><th class="r">Slowest 5%</th><th class="r">Slowest</th><th class="r">Jitter</th></tr></thead>
+    <tbody>{{range .Checks}}<tr><td>{{.Check}}</td><td class="m clip">{{.Target}}</td><td class="r">{{thousands .Probes}}</td><td class="r">{{printf "%.2f" .OKPct}}%</td>{{if .Have}}<td class="r">{{ms .MedianMS}}</td><td class="r">{{ms .P95MS}}</td><td class="r">{{ms .MaxMS}}</td><td class="r">{{ms .JitterMS}}</td>{{else}}<td class="r dim" colspan="4">no replies</td>{{end}}</tr>{{end}}</tbody></table>
+    <p class="fn">Succeeded is the share of probes that got a good answer. Medians and slowest-5% figures are worked out from the one-minute summaries, so they are close to, not exactly, the figures over every single probe.{{if .ChecksMore}} {{.ChecksMore}} more {{if eq .ChecksMore 1}}target is{{else}}targets are{{end}} left out; they are in the rollups CSV.{{end}}</p>
+  {{else}}<div class="empty-row">No probe summaries were recorded in this period.</div>{{end}}
+</div>
+{{template "close" (pg . 3 "" false)}}{{end}}
+
+{{define "p4"}}{{template "open" (pg . 4 "Monitoring and data quality" false)}}
+<div class="pg-title"><h1>How this was measured</h1><p>The profile in force decides how often each check runs, and so how quickly evidence arrives. This page shows what was running, how an outage is decided, and what the report can and cannot say.</p></div>
+<div class="sec">
+  <div class="sec-h"><h2>Monitoring profile</h2><span class="n">from the profile log</span></div>
+  <figure>{{.ProfileLaneSVG}}</figure>
+  {{if .Usage}}<table class="t dense fixed wraph"><caption>Profiles used in the period</caption><colgroup><col><col style="width:84px"><col style="width:84px"><col style="width:96px"><col style="width:120px"><col style="width:70px"><col style="width:76px"></colgroup>
+    <thead><tr><th>Profile</th><th class="r">Share of<br>period</th><th class="r">Probes<br>per second</th><th class="r">To the internet<br>per second</th><th class="r">Shortest outage<br>caught</th><th class="r">Outages</th><th class="r">Brief<br>failures</th></tr></thead>
+    <tbody>{{range .Usage}}<tr><td><b style="font-weight:600">{{.Name}}</b></td>{{if .Known}}<td class="r">{{printf "%.1f" .SharePct}}%</td><td class="r">{{printf "%.1f" .Probes}}</td><td class="r">{{printf "%.1f" .Remote}}</td><td class="r">{{printf "%.1f" (seconds .MinOutageMS)}} s</td>{{else}}<td class="r dim" colspan="4">not recorded</td>{{end}}<td class="r">{{.Outages}}</td><td class="r">{{.Blips}}</td></tr>{{end}}</tbody></table>{{else}}<div class="empty-row">No profile was recorded for this period. Events from before profile history was added are read as Standard.</div>{{end}}
+  <p class="fn">The outage rule is the same under every profile. A profile that probes more often sees more brief failures, so compare those counts only within one profile. An outage shorter than the "Shortest outage caught" figure can be missed or only partly seen. {{plural .Flags.ProfileChange "outage began" "outages began"}} under one profile and ended under another; the log marks {{if eq .Flags.ProfileChange 1}}it{{else}}them{{end}} with a dagger.</p>
+</div>
+<div class="sec">
+  <div class="sec-h"><h2>How an outage is decided</h2><span class="n">checks failing together, and what was recorded in this period</span></div>
+  <table class="t dense fixed"><caption>Which combinations of failing checks count as an outage</caption><colgroup><col style="width:46px"><col style="width:46px"><col style="width:46px"><col style="width:54px"><col><col style="width:110px"></colgroup>
+    <thead><tr><th class="c dc">TCP</th><th class="c dc">DNS</th><th class="c dc">HTTP</th><th class="c dc">Router</th><th>Counts as</th><th class="r">In this period</th></tr></thead>
+    <tbody>{{range .Rule.Rows}}<tr><td class="c dc">{{dot .TCP "tcp"}}</td><td class="c dc">{{dot .DNS "dns"}}</td><td class="c dc">{{dot .HTTP "http"}}</td><td class="c dc">{{dot .Router "gw"}}</td><td>{{if .Outage}}{{pillText "Outage" "bad"}}{{else}}{{pillText "Brief failure" "warn"}}{{end}}{{if .Note}}<span class="dim"> &nbsp;{{.Note}}</span>{{end}}</td><td class="r">{{.Count}}</td></tr>{{end}}</tbody></table>
+  <p class="fn">Ping is recorded and helps name the cause, but it is not one of the three that count. The cause label then follows which checks failed, as on the dashboard. A brief failure is counted under the check that failed in it.</p>
+</div>
+<div class="cols2">
+  <div class="sec">
+    <div class="sec-h"><h3>Gaps and changes the app recorded</h3></div>
+    {{if .Sys}}<table class="t dense fixed"><caption>System events</caption><colgroup><col style="width:104px"><col style="width:96px"><col></colgroup><thead><tr><th>When</th><th>What</th><th>Detail</th></tr></thead><tbody>{{range .Sys}}<tr><td>{{$.DayShort .AtMS}}, {{$.HM .AtMS}}</td><td class="clip">{{.What}}</td><td class="dim mono clip">{{.Detail}}</td></tr>{{end}}</tbody></table>{{if .SysMore}}<p class="fn">and {{.SysMore}} more.</p>{{end}}{{else}}<div class="empty-row">No gaps or changes were recorded in this period.</div>{{end}}
+    <div class="kv" style="margin-top:6px">
+      <div><span>Outages cut short by NetScan closing</span><b>{{.Flags.Interrupted}}</b></div>
+      <div><span>Outages that began just after waking</span><b>{{.Flags.PostResume}}</b></div>
+      <div><span>Outages while a VPN was active</span><b>{{.Flags.VPN}}</b></div>
+      <div><span>Outages that spanned a profile change</span><b>{{.Flags.ProfileChange}}</b></div>
+    </div>
+  </div>
+  <div class="sec">
+    <div class="sec-h"><h3>Coverage</h3></div>
+    <div class="card-na"><h3>Not recorded yet</h3><p>NetScan does not log when it is running, so this report cannot say what share of the {{.Period.Words}} was monitored. Time with NetScan switched off or paused counts as up in the uptime figure.{{if .Gaps}} The {{.GapText}} of gaps is the only unmonitored time the app can name.{{end}}</p></div>
+    <div class="sec-h" style="margin-top:6px"><h3>What this report can show</h3></div>
+    <ul class="method">
+      <li><span><b>Router answered.</b> A high figure points beyond the router. It cannot tell a modem or cable fault from an ISP fault.</span></li>
+      <li><span><b>Start times.</b> Known to within the "Start &plusmn;" figure in the log, which depends on the profile.</span></li>
+    </ul>
+  </div>
+</div>
+{{template "close" (pg . 4 "" false)}}{{end}}
+
+{{define "plog"}}{{template "open" (lpg .R .N "Outage log")}}
+{{if .Page.Intro}}<div class="pg-title"><h1>Outage log</h1><p>Every outage in the period, oldest first. IDs match the <span class="mono" style="font-size:11px">id</span> column in the events CSV.</p></div>
+<div><div class="legend" style="margin:0"><span>{{dot true "tcp"}}&nbsp;check failed</span><span>{{dot false "tcp"}}&nbsp;check did not fail</span><span><span class="dag" style="margin:0">&dagger;</span>&nbsp;began under one profile and ended under another</span></div>
+<p class="fn" style="margin-top:5px">Start &plusmn; is how precisely the start time is known. Router answered is the share of the router's own probes that got a reply while the outage lasted; under 90% is shown in amber.</p></div>{{end}}
+{{range .Page.Sections}}<div class="sec"><div class="sec-h"><h2>{{.Title}}{{if .Continued}}, continued{{end}}</h2><span class="n">{{.Note}}</span></div>
+{{if .Empty}}<div class="empty-row">{{if eq .Kind "local"}}No local or system events were recorded in this period.{{else}}No outages beyond the router were recorded in this period.{{end}}</div>
+{{else if eq .Kind "local"}}{{template "localtable" (tbl $.R .Rows "Local and system events")}}
+{{else}}{{template "isptable" (tbl $.R .Rows .Title)}}{{end}}</div>
+{{end}}
+{{range .Page.Tail}}{{if eq . "notinlog"}}<div class="sec">
+  <div class="sec-h"><h2>Not in the log</h2></div>
+  <p class="lede">{{plural (len $.R.Blips) "brief probe failure is" "brief probe failures are"}} not listed: one check failed, nothing else did, and it recovered on its own. {{if eq (len $.R.Blips) 1}}It is{{else}}They are{{end}} counted in the summary and the daily figures, and {{if eq (len $.R.Blips) 1}}it is{{else}}they are{{end}} in the events CSV. The {{len $.R.Slow}} slow {{if eq (len $.R.Slow) 1}}spell is{{else}}spells are{{end}} on page 3.{{if $.R.Truncated}} This period held more events than a report reads, so the oldest are left out.{{end}}</p>
+</div>
+{{else if eq . "data"}}<div class="sec">
+  <div class="sec-h"><h2>The data behind this report</h2><span class="n">available from the NetScan dashboard, last 7 days</span></div>
+  <table class="t dense fixed"><caption>Other exports</caption><colgroup><col style="width:190px"><col></colgroup>
+    <thead><tr><th>File</th><th>What it holds</th></tr></thead>
+    <tbody>
+      <tr><td class="m">events.csv</td><td>One row per outage, brief failure and slow spell. IDs match this log.</td></tr>
+      <tr><td class="m">rollups.csv, rollups.json</td><td>The one-minute summaries behind the speed charts.</td></tr>
+      <tr><td class="m">samples.csv</td><td>Individual probes. Only the last 6 hours are exported at this detail.</td></tr>
+      <tr><td class="m">isp-report.txt</td><td>The plain-text evidence report.</td></tr>
+    </tbody></table>
+</div>
+{{else if eq . "terms"}}<div class="sec">
+  <div class="sec-h"><h2>Terms used in this report</h2></div>
+  <dl class="terms">
+    <div><dt>Outage</dt><dd>Two or more of TCP, DNS and HTTP failing together, or the router not answering. Ping alone never counts.</dd></div>
+    <div><dt>Brief failure</dt><dd>One check failed and recovered by itself. Counted, not an outage.</dd></div>
+    <div><dt>Slow spell</dt><dd>Round-trip time well above NetScan's recent baseline while every check still passes.</dd></div>
+    <div><dt>Router answered</dt><dd>The share of the router's own probes that got a reply during an outage. 90% or more points beyond the router.</dd></div>
+    <div><dt>Profile</dt><dd>How often each check runs. Standard is gentle. Aggressive sends more probes and notices shorter outages.</dd></div>
+    <div><dt>Uptime</dt><dd>100% minus the time offline. Time when NetScan was not running counts as up.</dd></div>
+  </dl>
+</div>
+{{else if eq . "end"}}<p class="fn" style="margin-top:auto">End of report. Measured from one computer on this network, so it shows what that computer could reach. It cannot see inside the ISP's network.</p>
+{{end}}{{end}}
+{{template "close" (lpg .R .N "")}}{{end}}
+
+{{define "doc"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>NetScan connection stability report, {{.R.ShortPeriod}}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+{{.CSS}}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="toolbar screen-only">
+    <span class="lead">Connection stability report</span>
+    <nav class="periods" aria-label="Period">{{range .Periods}}<a href="?period={{.Value}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+    <span class="acts"><button type="button" id="print">Print or save as PDF</button><a class="alt" href="?period={{.R.Period}}&amp;download=1">Download page</a></span>
+    <p class="hint">In the print dialog choose <b>Save as PDF</b>. The paper is A4 and the margins are built in, so leave them at None or Default.</p>
+  </div>
+  <main class="sheets" id="sheets">
+{{template "p1" .R}}
+{{template "p2" .R}}
+{{template "p3" .R}}
+{{template "p4" .R}}
+{{range $i, $p := .R.Log.Pages}}{{template "plog" (logCtx $.R $i $p)}}
+{{end}}  </main>
+</div>
+<script>
+(function () {
+  try { var t = localStorage.getItem('netscan-theme'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+  var b = document.getElementById('print');
+  if (b) b.addEventListener('click', function () { window.print(); });
+  var wrap = document.getElementById('sheets');
+  if (!wrap) return;
+  var W = 793.7;
+  function fit() {
+    var k = Math.min(1, wrap.clientWidth / W);
+    [].slice.call(wrap.querySelectorAll('.sheet-frame')).forEach(function (f) {
+      var s = f.firstElementChild;
+      s.style.transform = k < 1 ? 'scale(' + k + ')' : '';
+      f.style.width = (W * k) + 'px';
+      f.style.height = (s.offsetHeight * k) + 'px';
+    });
+  }
+  fit();
+  window.addEventListener('resize', fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(wrap);
+})();
+</script>
+</body>
+</html>
+{{end}}

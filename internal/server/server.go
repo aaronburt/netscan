@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -22,6 +23,7 @@ import (
 	"github.com/aaronburt/netscan/internal/hub"
 	"github.com/aaronburt/netscan/internal/netenv"
 	"github.com/aaronburt/netscan/internal/probe"
+	"github.com/aaronburt/netscan/internal/report"
 	"github.com/aaronburt/netscan/internal/scheduler"
 	"github.com/aaronburt/netscan/internal/store"
 	"github.com/aaronburt/netscan/internal/switcher"
@@ -227,6 +229,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pause", s.handlePause)
 	mux.HandleFunc("/api/resume", s.handleResume)
 	mux.HandleFunc("/api/export/isp-report.txt", s.handleExportISPReport)
+	mux.HandleFunc("/api/export/report.html", s.handleExportReport)
 	mux.HandleFunc("/api/export/events.csv", s.handleExportEventsCSV)
 	mux.HandleFunc("/api/export/samples.csv", s.handleExportSamplesCSV)
 	mux.HandleFunc("/api/export/rollups.csv", s.handleExportRollupsCSV)
@@ -586,6 +589,51 @@ func (s *Server) handleExportISPReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"netscan-isp-evidence-report.txt\"")
 	_ = export.GenerateISPReport(w, meta, events, stats, usage, gwStr, "Detected ISP Gateway")
+}
+
+// handleExportReport serves the printable report. The page is built in memory
+// first, so a failure is a clean 500 and not half a document. It opens inline
+// by default, so it can be printed to PDF; download=1 saves it as a file.
+func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	period, ok := report.ParsePeriod(r.URL.Query().Get("period"))
+	if !ok {
+		http.Error(w, "period must be 24h, 7d or 30d", http.StatusBadRequest)
+		return
+	}
+
+	info := s.netEnv.GetNetworkInfo()
+	net := report.Network{Interface: info.InterfaceName, ID: s.netEnv.GetFingerprint(), VPN: info.IsVPN}
+	if info.GatewayIP != nil {
+		net.GatewayIP = info.GatewayIP.String()
+	}
+	if s.registry != nil {
+		if hop := s.registry.GetISPHop(); hop != nil {
+			net.ISPHopIP = hop.Address
+		}
+	}
+
+	var buf bytes.Buffer
+	err := report.Generate(&buf, s.storeReader, report.Options{
+		Period:   period,
+		Location: time.Local,
+		Version:  s.version,
+		Network:  net,
+	})
+	if err != nil {
+		http.Error(w, "Could not build the report", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"netscan-report-%s.html\"", period))
+	}
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *Server) handleExportEventsCSV(w http.ResponseWriter, _ *http.Request) {
