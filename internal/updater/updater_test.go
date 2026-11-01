@@ -36,6 +36,14 @@ func TestCompareVersions(t *testing.T) {
 		{"1.10.0", "1.9.0", 1},
 		{"v1.2.3", "v1.2.4", -1},
 		{"v1.2.4", "v1.2.3", 1},
+		// Major.Minor releases (0.10 is the first) against the old three-part tags.
+		{"0.10", "0.9.8", 1},
+		{"0.9.8", "0.10", -1},
+		{"v0.11", "0.10", 1},
+		{"0.10", "0.10.0", 0},
+		{"0.10.1", "0.10", 1},
+		{"0.99", "0.100", -1},
+		{"1.0", "0.99", 1},
 	}
 
 	for _, c := range cases {
@@ -311,6 +319,52 @@ func TestManagerCheck(t *testing.T) {
 	}
 	if status.LatestVersion != "0.3.0" {
 		t.Fatalf("expected latest version 0.3.0, got %s", status.LatestVersion)
+	}
+}
+
+func TestManagerCheckMajorMinorTag(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rel := updater.Release{
+			TagName: "v0.10",
+			Name:    "Release v0.10",
+			Assets: []updater.ReleaseAsset{
+				{
+					Name:        "netscan-windows-amd64.exe",
+					DownloadURL: "https://example.com/netscan.exe",
+					Size:        2000000,
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rel)
+	}))
+	defer ts.Close()
+
+	// 0.9.8 was the last three-part release, and 0.10 must count as newer.
+	mgr := updater.NewManager(ts.URL, "0.9.8", nil)
+	mgr.SetHTTPClient(ts.Client())
+
+	res, err := mgr.Check(context.Background())
+	if err != nil {
+		t.Fatalf("manager check failed: %v", err)
+	}
+	if !res.UpdateAvailable {
+		t.Fatal("expected update from 0.9.8 to 0.10")
+	}
+	if res.LatestVersion != "0.10" {
+		t.Fatalf("expected latest version 0.10, got %s", res.LatestVersion)
+	}
+
+	// Already on 0.10: the same release is not an update.
+	mgr = updater.NewManager(ts.URL, "0.10", nil)
+	mgr.SetHTTPClient(ts.Client())
+
+	res, err = mgr.Check(context.Background())
+	if err != nil {
+		t.Fatalf("manager check failed: %v", err)
+	}
+	if res.UpdateAvailable {
+		t.Fatal("expected no update when already on 0.10")
 	}
 }
 
