@@ -1,8 +1,8 @@
 name: PR title
 
-# The PR title decides the release version: "feat:" is a minor bump, any other
-# type is a patch. Breaking-change markers ("!") are rejected because major
-# bumps are only made manually.
+# Every merge to main is a minor release, so the title no longer sets the
+# version. It still needs a type prefix for readable history. Breaking-change
+# markers ("!") are rejected because major releases are only made manually.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -20,6 +20,6 @@ jobs:
             exit 1
           fi
           if ! echo "$TITLE" | grep -Eq '^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([^)]+\))?: .+'; then
-            echo "::error::PR title must start with a type, e.g. 'fix: ...' or 'feat(ui): ...'. Types: feat (minor release); fix, perf, refactor, docs, test, build, ci, chore, style, revert (patch release)."
+            echo "::error::PR title must start with a type, e.g. 'fix: ...' or 'feat(ui): ...'. Types: feat, fix, perf, refactor, docs, test, build, ci, chore, style, revert. The type does not change the release number."
             exit 1
           fi

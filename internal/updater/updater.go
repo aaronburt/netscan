@@ -77,21 +77,28 @@ func parseVersion(v string) ([]int, string) {
 		}
 		nums = append(nums, n)
 	}
-	for len(nums) < 3 {
-		nums = append(nums, 0)
-	}
 	return nums, pre
 }
 
+// CompareVersions returns -1, 0 or 1. Any number of numeric parts is allowed,
+// and a missing part counts as zero, so "0.10" is newer than the older
+// three-part tag "0.9.8" and equals "0.10.0".
 func CompareVersions(v1, v2 string) int {
 	nums1, pre1 := parseVersion(v1)
 	nums2, pre2 := parseVersion(v2)
 
-	for i := 0; i < 3; i++ {
-		if nums1[i] < nums2[i] {
+	for i := 0; i < len(nums1) || i < len(nums2); i++ {
+		var a, b int
+		if i < len(nums1) {
+			a = nums1[i]
+		}
+		if i < len(nums2) {
+			b = nums2[i]
+		}
+		if a < b {
 			return -1
 		}
-		if nums1[i] > nums2[i] {
+		if a > b {
 			return 1
 		}
 	}
