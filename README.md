@@ -166,18 +166,16 @@ Or run the standalone updater helper in the `dist\` folder (pulls latest release
 
 ## Releases
 
-Every merged PR ships a release automatically. The PR title decides the version bump, using [Conventional Commit](https://www.conventionalcommits.org/) types:
+Versions are `MAJOR.MINOR` with no patch number. `0.9.8` was the last three-part release, so the next ones are `0.10`, `0.11`, `0.12` and so on, with no upper limit. Older three-part tags stay as they are.
 
-- `feat: ...` bumps the minor version (0.5.0 → 0.6.0)
-- anything else (`fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`, `chore:`, `style:`, `revert:`) bumps the patch version (0.5.0 → 0.5.1)
-- `!` breaking-change markers in a title are rejected: major bumps are never automatic
+Every merged PR ships its own release, and each one is a minor bump (`0.10` → `0.11`). The PR title does not set the version. It still needs a [Conventional Commit](https://www.conventionalcommits.org/) type prefix such as `fix:` or `ci:`, and `!` breaking-change markers are rejected.
 
 A `PR title` check enforces the format. On merge, the `Release` workflow tests and builds the Windows binaries, then creates the tag and GitHub Release with `netscan-windows-amd64.zip`, `netscan-installer.exe`, `netscan.exe`, `updater.exe`, `netscan-linux-amd64.tar.gz`, `netscan-linux-arm64.tar.gz` and `checksums.txt`. After the release exists, the same workflow pushes the container image to `ghcr.io/aaronburt/netscan` for amd64 and arm64, tagged with the version and `latest`.
 
 ### Major release
 
-Go to **Actions → Release → Run workflow**, pick `main`, and set `bump` to `major` (0.5.0 → 1.0.0).
+Major releases are never automatic. Go to **Actions → Release → Run workflow**, pick `main`, and set `bump` to `major` (`0.99` → `1.0`).
 
 ### Rebuilding a release
 
-If a release run fails, run the same workflow with `rebuild_tag` set to the tag (e.g. `v0.5.1`) to rebuild and re-upload its assets.
+If a release run fails, run the same workflow with `rebuild_tag` set to the tag (e.g. `v0.10`) to rebuild and re-upload its assets.
