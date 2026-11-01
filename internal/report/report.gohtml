@@ -37,15 +37,15 @@
 <div class="kpis">
   <div class="kpi"><div class="l">Uptime</div><div class="v">{{if .NoData}}n/a{{else}}{{uptime .UptimePct .OfflineMS}}<small>%</small>{{end}}</div><div class="s">of the monitored time had no outage<sup>1</sup></div></div>
   <div class="kpi"><div class="l">Outages</div><div class="v">{{len .Outages}}</div><div class="s">{{.OutageSub}}</div></div>
-  <div class="kpi"><div class="l">Time offline</div><div class="v">{{big .OfflineMS}}</div><div class="s">{{printf "%.2f" .OfflinePct}}% of the period</div></div>
+  <div class="kpi"><div class="l">Time offline</div><div class="v">{{big .OfflineMS}}</div><div class="s">{{printf "%.2f" .OfflinePct}}% {{if .StartsLate}}of the monitored time{{else}}of the period{{end}}</div></div>
   <div class="kpi"><div class="l">Longest outage</div>{{with .Longest}}<div class="v">{{big .DurMS}}</div><div class="s">{{$.DayShort .StartMS}} at {{$.HM .StartMS}}</div>{{else}}<div class="v">&ndash;</div><div class="s">no outages</div>{{end}}</div>
 </div>
 <div class="stats">
   <div><div class="l">Brief failures</div><div class="v">{{len .Blips}}</div><div class="s">counted, not outages</div></div>
   <div><div class="l">Slow spells</div><div class="v">{{len .Slow}}</div><div class="s">{{.SlowSub}}</div></div>
   <div><div class="l">Internet latency</div>{{if .Latency.Have}}<div class="v">{{ms .Latency.MedianMS}} ms</div><div class="s">median &middot; slowest 5% {{ms .Latency.P95MS}} ms</div>{{else}}<div class="v">No data</div><div class="s">no ping times recorded</div>{{end}}</div>
-  <div><div class="l">Probe loss</div><div class="v">{{printf "%.2f" .LossPct}}%</div><div class="s">of {{count .Sent}} probes</div></div>
-  <div><div class="l">Known gaps</div><div class="v">{{.GapText}}</div><div class="s">PC asleep, not monitored</div></div>
+  <div><div class="l">Probe loss</div><div class="v">{{printf "%.2f" .LossPct}}%</div><div class="s">of {{count .Sent}} probes, follow-ups included</div></div>
+  <div><div class="l">Known gaps</div><div class="v">{{.GapText}}</div><div class="s">not monitored</div></div>
   <div class="na"><div class="l">Coverage</div><div class="v">Not recorded</div><div class="s">NetScan does not log when it runs yet<sup>1</sup></div></div>
 </div>
 <div class="sec">
@@ -114,7 +114,7 @@
   {{if .Checks}}<table class="t dense fixed"><caption>Per-check results</caption><colgroup><col style="width:92px"><col><col style="width:70px"><col style="width:80px"><col style="width:62px"><col style="width:80px"><col style="width:64px"><col style="width:54px"></colgroup>
     <thead><tr><th>Check</th><th>Target</th><th class="r">Probes</th><th class="r">Succeeded</th><th class="r">Median</th><th class="r">Slowest 5%</th><th class="r">Slowest</th><th class="r">Jitter</th></tr></thead>
     <tbody>{{range .Checks}}<tr><td>{{.Check}}</td><td class="m clip">{{.Target}}</td><td class="r">{{thousands .Probes}}</td><td class="r">{{printf "%.2f" .OKPct}}%</td>{{if .Have}}<td class="r">{{ms .MedianMS}}</td><td class="r">{{ms .P95MS}}</td><td class="r">{{ms .MaxMS}}</td><td class="r">{{ms .JitterMS}}</td>{{else}}<td class="r dim" colspan="4">no replies</td>{{end}}</tr>{{end}}</tbody></table>
-    <p class="fn">Succeeded is the share of probes that got a good answer. Medians and slowest-5% figures are worked out from the one-minute summaries, so they are close to, not exactly, the figures over every single probe.{{if .ChecksMore}} {{.ChecksMore}} more {{if eq .ChecksMore 1}}target is{{else}}targets are{{end}} left out; they are in the rollups CSV.{{end}}</p>
+    <p class="fn">Succeeded is the share of probes that got a good answer. After a failure NetScan sends follow-up probes to other hosts, so hosts that are mostly probed as a follow-up read lower than the line really was, and the probe loss in the summary reads higher than real packet loss. Medians and slowest-5% figures are worked out from the one-minute summaries, so they are close to, not exactly, the figures over every single probe.{{if .ChecksMore}} {{.ChecksMore}} more {{if eq .ChecksMore 1}}target is{{else}}targets are{{end}} left out; they are in the rollups CSV.{{end}}</p>
   {{else}}<div class="empty-row">No probe summaries were recorded in this period.</div>{{end}}
 </div>
 {{template "close" (pg . 3 "" false)}}{{end}}

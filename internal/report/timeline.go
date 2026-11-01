@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -171,7 +172,7 @@ func (r *Report) buildGaps(sys []netenv.SystemEvent) {
 			rows = append(rows, SysRow{AtMS: e.Timestamp, What: "Router changed", Detail: gatewayChange(e.Detail)})
 		case netenv.SysEventISPHopChange:
 			addr := hopAddress(e.Detail)
-			if addr == "" || addr == lastHop {
+			if ip := net.ParseIP(addr); ip == nil || ip.IsUnspecified() || addr == lastHop {
 				continue
 			}
 			what := "ISP hop changed"
