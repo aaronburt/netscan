@@ -416,3 +416,18 @@ func TestCheckNames(t *testing.T) {
 		}
 	}
 }
+
+func TestUnspecifiedISPHopIsNotListed(t *testing.T) {
+	f := &fixture{}
+	f.sys = []netenv.SystemEvent{
+		{ID: 1, Timestamp: ago(30), Kind: netenv.SysEventISPHopChange, Detail: "isp hop discovered at 0.0.0.0 (ttl=3)"},
+		{ID: 2, Timestamp: ago(20), Kind: netenv.SysEventISPHopChange, Detail: "isp hop discovered at 198.51.100.9 (ttl=3)"},
+	}
+	r, err := Build(f, fixtureOptions(Period7d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Sys) != 1 || r.Sys[0].Detail != "found at 198.51.100.9" {
+		t.Fatalf("system rows = %+v, want only the real hop", r.Sys)
+	}
+}
